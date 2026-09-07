@@ -1,15 +1,20 @@
 """传感器实体定义。
 
-传感器与泰能燃气“非自然月计费”口径对应关系：
+传感器与泰能燃气计费口径对应关系：
   * 官方读数在每月末抄表日结算 → 「上个账期累计表读数」= 官方读数（抄表日更新）
   * 抄表日之后逐日结算的用量之和 → 「本账期累计用量」
-  * 官方读数 + 本账期累计用量 = 「预计当前读数」（连续估算值，以属性提供）
+  * 官方读数 + 本账期累计用量 = 「预计当前读数」，即「燃气总用量」实体值
+    （total_increasing，可直接接入能源面板做逐日/逐月统计）
+  * 「当年累计用量」= 官方年度已结算累计（cycleCreditQty）+ 本年度未结算增量，
+    户·年累计、每年 1 月 1 日清零，用于核算阶梯计费（阈值 228 / 348 m³）
+  * 「燃气费单价」= 按当年累计用量判定的当前边际单价（3.54 / 4.12 / 4.99 元/m³），
+    跨过阈值后自动切换到更高一档
   * 每个已结算日生成一个「每日耗气量」实体，逐日补录，值固定不变。
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -24,23 +29,42 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    ATTR_ANNUAL_CYCLE_END,
+    ATTR_ANNUAL_SETTLED,
+    ATTR_ANNUAL_UNBILLED,
     ATTR_BASE_READING,
     ATTR_CYCLE_END,
     ATTR_CYCLE_START,
     ATTR_DATA_LAG,
     ATTR_ESTIMATED_READING,
+    ATTR_LADDER,
     ATTR_METER_NO,
     ATTR_METER_READING_DATE,
+    ATTR_NEXT_TIER_AT,
+    ATTR_NEXT_TIER_REMAINING,
     ATTR_READING_DATE,
     ATTR_RECENT_DAYS,
     ATTR_SETTLED_DATE,
+    ATTR_TIER,
+    ATTR_TIER_NAME,
+    ATTR_TIER_PRICES,
+    ATTR_TIER_REMAINING,
+    ATTR_TIER_THRESHOLDS,
     ATTR_USER_NO,
     DOMAIN,
+    GAS_TIER_NAMES,
+    GAS_TIER_PRICES,
+    GAS_TIER_THRESHOLDS,
+    KEY_ANNUAL_USAGE,
     KEY_CYCLE_USAGE,
     KEY_DAILY_SERIES,
     KEY_DAILY_USAGE,
+    KEY_GAS_PRICE,
     KEY_METER_READING,
+    KEY_TOTAL_GAS,
     MANUFACTURER,
+    gas_price_for_annual_usage,
+    tier_for_annual_usage,
 )
 from .coordinator import TanengGasCoordinator, build_last_reset
 
@@ -57,10 +81,13 @@ async def async_setup_entry(
     """设置传感器平台。"""
     coordinator: TanengGasCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # 1) 核心实体（口径随账期，见类注释）
+    # 1) 核心实体（口径见类注释）
     core = [
         MeterReadingSensor(coordinator, entry),
         CycleUsageSensor(coordinator, entry),
+        TotalGasSensor(coordinator, entry),
+        AnnualUsageSensor(coordinator, entry),
+        GasPriceSensor(coordinator, entry),
         DailyUsageSensor(coordinator, entry),
     ]
 
@@ -103,6 +130,30 @@ def _device_info(coordinator: TanengGasCoordinator, entry: ConfigEntry) -> dict[
         "model": "NB-IoT 物联网燃气表",
         "configuration_url": "https://cloudselfhelp-mobile.eslink.cc/",
     }
+
+
+def _annual_tier_attributes(data: dict[str, Any]) -> dict[str, Any]:
+    """年度阶梯计费上下文（「当年累计用量」与「燃气费单价」共用）。"""
+    usage = data.get("annual_usage")
+    tier = tier_for_annual_usage(usage)
+    attrs: dict[str, Any] = {
+        ATTR_ANNUAL_SETTLED: data.get("annual_settled"),
+        ATTR_ANNUAL_UNBILLED: data.get("annual_unbilled"),
+        ATTR_ANNUAL_CYCLE_END: data.get("annual_cycle_end"),
+        ATTR_LADDER: data.get("annual_ladder"),
+        ATTR_TIER_THRESHOLDS: GAS_TIER_THRESHOLDS,
+        ATTR_TIER_PRICES: GAS_TIER_PRICES,
+        ATTR_TIER_REMAINING: data.get("tier_remaining", []),
+        ATTR_TIER: tier,
+        ATTR_TIER_NAME: GAS_TIER_NAMES[tier - 1] if tier else None,
+        ATTR_NEXT_TIER_AT: None,
+        ATTR_NEXT_TIER_REMAINING: None,
+    }
+    if tier is not None and usage is not None and tier < len(GAS_TIER_THRESHOLDS):
+        next_at = GAS_TIER_THRESHOLDS[tier - 1]
+        attrs[ATTR_NEXT_TIER_AT] = next_at
+        attrs[ATTR_NEXT_TIER_REMAINING] = round(max(0.0, next_at - usage), 4)
+    return attrs
 
 
 class TanengGasBaseEntity(CoordinatorEntity[TanengGasCoordinator], SensorEntity):
@@ -210,6 +261,112 @@ class CycleUsageSensor(TanengGasBaseEntity):
                 ATTR_DATA_LAG: self._data.get("data_lag_days"),
             }
         )
+        return attrs
+
+
+class TotalGasSensor(TanengGasBaseEntity):
+    """燃气总用量（预计当前读数，燃气表累计读数）。
+
+    值 = 上个账期累计表读数（官方读数）+ 本账期累计用量。
+    total_increasing、数值单调递增（抄表结算、跨年都不回落），
+    可直接接入能源面板「能耗 → 天然气」做逐日 / 逐月统计。
+    """
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:gauge"
+
+    def __init__(self, coordinator: TanengGasCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, KEY_TOTAL_GAS)
+        self._attr_name = "燃气总用量"
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._data.get("estimated_reading")
+        return None if value is None else round(float(value), 3)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = self._common_attributes()
+        attrs.update(
+            {
+                ATTR_BASE_READING: self._data.get("official_reading"),
+                ATTR_METER_READING_DATE: self._data.get("base_date"),
+                ATTR_CYCLE_START: self._data.get("cycle_start"),
+                ATTR_SETTLED_DATE: self._data.get("settled_date"),
+                ATTR_DATA_LAG: self._data.get("data_lag_days"),
+                ATTR_ESTIMATED_READING: self._data.get("estimated_reading"),
+            }
+        )
+        return attrs
+
+
+class AnnualUsageSensor(TanengGasBaseEntity):
+    """当年累计用量（户·年累计，每年 1 月 1 日清零）。
+
+    值 = 官方年度已结算累计（cycleCreditQty，每月抄表结算后更新）
+       + 本年度内抄表后仍未结算的用量增量（随每天结算逐日递增）。
+    该累计量用于泰能阶梯计费核算：跨过 228 / 348 m³ 阈值后，
+    后续每立方米按更高一档单价计费（详见「燃气费单价」实体）。
+    """
+
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 3
+    _attr_icon = "mdi:calendar-range"
+
+    def __init__(self, coordinator: TanengGasCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, KEY_ANNUAL_USAGE)
+        self._attr_name = "当年累计用量"
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._data.get("annual_usage")
+        return None if value is None else round(float(value), 3)
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """每年 1 月 1 日零点为重置点。"""
+        year = self._data.get("annual_cycle_year")
+        if not year:
+            return None
+        try:
+            return datetime.combine(date(int(year), 1, 1), datetime.min.time())
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = self._common_attributes()
+        attrs.update(_annual_tier_attributes(self._data))
+        return attrs
+
+
+class GasPriceSensor(TanengGasBaseEntity):
+    """燃气费单价（当前边际单价，元/m³）。
+
+    按「当年累计用量」判定当前阶梯，状态 = 下一立方米将适用的单价：
+    第一阶梯 3.54 / 第二阶梯 4.12 / 第三阶梯 4.99（元/m³）。
+    当年累计跨过 228 / 348 阈值后，本实体自动切换到更高一档单价。
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "CNY/m³"
+    _attr_device_class = None  # 单价不是金额本身，不使用 monetary 类
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:cash-multiple"
+
+    def __init__(self, coordinator: TanengGasCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, KEY_GAS_PRICE)
+        self._attr_name = "燃气费单价"
+
+    @property
+    def native_value(self) -> float | None:
+        return gas_price_for_annual_usage(self._data.get("annual_usage"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs = self._common_attributes()
+        attrs.update(_annual_tier_attributes(self._data))
         return attrs
 
 

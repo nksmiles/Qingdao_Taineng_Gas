@@ -60,6 +60,24 @@ def _to_float(value: Any) -> float:
         return 0.0
 
 
+def _to_optional_float(value: Any) -> float | None:
+    """把字段转成 float；字段缺失或为空串时返回 None。"""
+    if value is None or str(value).strip() == "":
+        return None
+    return _to_float(value)
+
+
+def _to_optional_int(value: Any) -> int | None:
+    """把字段转成 int；字段缺失或为空串时返回 None。"""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except ValueError:
+        _LOGGER.debug("无法转换为整数：%s", value)
+        return None
+
+
 def _normalize_date(yyyymmdd: str | None) -> str | None:
     """把 20260830 形式的抄表日期转成 2026-08-30，便于字符串直接比较。"""
     if not yyyymmdd:
@@ -178,6 +196,10 @@ class EsLinkApi:
                     "last_billing_date": _normalize_date(meter.get("lastBillingDate")),
                     "price1": _to_float(meter.get("price1")),
                     "cyc_surplus": meter.get("cycSurplus") or "",
+                    # 年度阶梯计费字段（见 const.py / README「燃气费单价」）
+                    "cycle_credit_qty": _to_optional_float(meter.get("cycleCreditQty")),
+                    "ladder": _to_optional_int(meter.get("ladder")),
+                    "cyc_end_date": _normalize_date(meter.get("cycEndDate")),
                     "is_default": bool(item.get("defaultUser") == 1),
                     "is_active": bool(item.get("active")),
                 }

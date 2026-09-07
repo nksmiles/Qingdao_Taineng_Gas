@@ -19,8 +19,12 @@
   已结算区间   : 2026-08-01 ~ 2026-09-06（09-07 当天为 0，未结算）
   官方读数     : 207.0 m³ @ 2026-08-30
   本账期累计   : 0.7+0.6+0.6+0.5+0.4+0.3+0.6 = 3.7 m³（默认口径 08-31 起算）
-  预计当前读数 : 210.7 m³   （include_base_day=True 时为 4.1 / 211.1 m³）
+  预计当前读数 : 210.7 m³   （include_base_day=True 时本账期 4.1 / 预计 211.1 m³）
   最近一日用量 : 0.6 m³ @ 2026-09-06
+  年度阶梯     : 官方年度已结算累计 cycleCreditQty = 145.0 m³；
+                 加本年度未结算增量 3.7 → 「当年累计用量」148.7 m³（默认口径）；
+                 未触达 228 阈值 → 边际单价仍为第一阶梯 3.54 元/m³
+                 （include_base_day=True 时未结算 4.1 → 当年累计 149.1）
   账期核对     : 07-30 抄表 199.0 → 08-30 抄表 207.0，间隔 31 天，
                  账单 8.0 m³ 全部为第一阶梯 3.54 元/m³ → 应缴 28.32 元，
                  与日数据窗口内 08-01~08-30 合计 7.4 m³ + 窗口外 07-31（0.6）吻合。
@@ -68,11 +72,13 @@ SNAPSHOTS = {
                 "daily_usage": 0.3, "settled_date": "2026-09-05", "data_lag_days": 1},
         True: {"cycle_total": 3.5, "estimated_reading": 210.5},
     },
-    # 新快照：抓于 2026-09-07（已结算到 09-06）
+    # 新快照：抓于 2026-09-07（已结算到 09-06；年度字段按 cycleCreditQty=145.0）
     "2026-09-07": {
         False: {"cycle_total": 3.7, "estimated_reading": 210.7,
-                "daily_usage": 0.6, "settled_date": "2026-09-06", "data_lag_days": 1},
-        True: {"cycle_total": 4.1, "estimated_reading": 211.1},
+                "daily_usage": 0.6, "settled_date": "2026-09-06", "data_lag_days": 1,
+                "annual_settled": 145.0, "annual_unbilled": 3.7, "annual_usage": 148.7},
+        True: {"cycle_total": 4.1, "estimated_reading": 211.1,
+               "annual_unbilled": 4.1, "annual_usage": 149.1},
     },
 }
 
@@ -246,10 +252,16 @@ def load_snapshot(har_path: Path, today_arg: str | None) -> dict:
         "meter_reading": float(meter.get("meterReading") or 0),
         "meter_reading_date": _norm_reading_date(meter.get("meterReadingDate")),
         "is_default": bool(item.get("defaultUser") == 1),
-        # 年度第一档累计量（用于阶梯核对）
+        # 年度阶梯相关字段（cycleCreditQty=官方年度已结算累计，用于阶梯核对）
         "cycle_credit_qty": (
             float(meter.get("cycleCreditQty")) if meter.get("cycleCreditQty") not in (None, "") else None
         ),
+        "ladder": (
+            int(meter.get("ladder")) if meter.get("ladder") not in (None, "") else None
+        ),
+        "cyc_end_date": _norm_reading_date(meter.get("cycEndDate")),
+        "cyc_surplus": meter.get("cycSurplus") or "",
+        "price1": float(meter.get("price1") or 0),
     }
 
     # 2) 日粒度 / 月粒度用量
@@ -328,6 +340,26 @@ def manual_compute(info: dict, rows: list[dict], today: str, include_base_day: b
         cycle_total = round(cycle_total, 4)
     estimated = round(base + (cycle_total or 0.0), 4)
 
+    # 年度阶梯（与 coordinator._compute 的「官方已结算 + 本年度未结算」口径一致）
+    year = date.fromisoformat(today).year
+    cyc_end = info.get("cyc_end_date") or ""
+    credit = info.get("cycle_credit_qty")
+    annual_settled = None
+    if credit is not None:
+        cyc_year = year
+        if len(cyc_end) >= 4 and cyc_end[:4].isdigit():
+            cyc_year = int(cyc_end[:4])
+        annual_settled = round(float(credit), 4) if cyc_year == year else 0.0
+    annual_unbilled = 0.0
+    if base_date and settled_date and settled_date >= base_date:
+        annual_unbilled = round(sum(
+            r["volume"] for r in settled
+            if r["date"].startswith(str(year))
+            and (base_date <= r["date"] if include_base_day else base_date < r["date"])
+            and r["date"] <= settled_date
+        ), 4)
+    annual_usage = round(annual_settled + annual_unbilled, 4) if annual_settled is not None else None
+
     recent = [
         {"date": r["date"], "volume": round(r["volume"], 4)}
         for r in settled[-7:]
@@ -345,6 +377,9 @@ def manual_compute(info: dict, rows: list[dict], today: str, include_base_day: b
         else (date.fromisoformat(today) - date.fromisoformat(settled_date)).days,
         "recent": recent,
         "daily_series": daily_series,
+        "annual_settled": annual_settled,
+        "annual_unbilled": annual_unbilled,
+        "annual_usage": annual_usage,
     }
 
 
@@ -389,6 +424,11 @@ def run_sensor_cases(snap: dict, include_flag: bool | None) -> list[str]:
         print(f"   本账期累计 = {result['cycle_total']} m³   预计当前读数 = {result['estimated_reading']} m³")
         print(f"   最近一日用量 = {result['daily_usage']} m³ @ {result['settled_date']}   数据滞后 = {result['data_lag_days']} 天")
         print(f"   日数据原始条数 = {result['raw_count']}   每日耗气量实体数 = {len(result['daily_series'])}")
+        print(f"   官方年度已结算 = {result.get('annual_settled')} m³   "
+              f"本年度未结算增量 = {result.get('annual_unbilled')} m³")
+        print(f"   当年累计用量 = {result.get('annual_usage')} m³   "
+              f"燃气费单价(边际) = {const.gas_price_for_annual_usage(result.get('annual_usage'))} 元/m³   "
+              f"档位 = {const.tier_for_annual_usage(result.get('annual_usage'))}")
 
         # 与参考实现对照（防“两处同错”）
         manual = manual_compute(info, rows, today, include_base_day)
@@ -400,6 +440,9 @@ def run_sensor_cases(snap: dict, include_flag: bool | None) -> list[str]:
         compare("数据滞后(对照)", result["data_lag_days"], manual["data_lag_days"], errors)
         expect_equal("每日耗气量明细(对照)", result["daily_series"], manual["daily_series"], errors)
         expect_equal("最近7天(对照)", result["recent_days"], manual["recent"], errors)
+        compare("当年累计用量(对照)", result.get("annual_usage"), manual.get("annual_usage"), errors)
+        compare("官方年度已结算(对照)", result.get("annual_settled"), manual.get("annual_settled"), errors)
+        compare("年度未结算增量(对照)", result.get("annual_unbilled"), manual.get("annual_unbilled"), errors)
 
         # 若为已知快照，再与静态验收值核对
         exp = SNAPSHOTS.get(today, {}).get(include_base_day)
@@ -411,6 +454,19 @@ def run_sensor_cases(snap: dict, include_flag: bool | None) -> list[str]:
                 expect_equal("已结算日期(验收)", result["settled_date"], exp["settled_date"], errors)
                 compare("数据滞后(验收)", result["data_lag_days"], exp["data_lag_days"], errors)
                 expect_equal("官方读数(验收)", result["official_reading"], info["meter_reading"], errors)
+            # 年度阶梯静态验收（仅当快照提供了对应期望值）
+            if exp.get("annual_settled") is not None:
+                compare("官方年度已结算(验收)", result.get("annual_settled"), exp["annual_settled"], errors)
+            if exp.get("annual_unbilled") is not None:
+                compare("年度未结算增量(验收)", result.get("annual_unbilled"), exp["annual_unbilled"], errors)
+            if exp.get("annual_usage") is not None:
+                compare("当年累计用量(验收)", result.get("annual_usage"), exp["annual_usage"], errors)
+                compare(
+                    "燃气费单价(验收)",
+                    const.gas_price_for_annual_usage(result.get("annual_usage")),
+                    const.gas_price_for_annual_usage(exp["annual_usage"]),
+                    errors,
+                )
     return errors
 
 
@@ -646,6 +702,8 @@ def main() -> int:
     print("  3. 最近一日用量应为 0.6 m³（2026-09-06）")
     print("  4. include_base_day=True 时本账期累计用量应为 4.1 m³（多含 08-30 的 0.4）")
     print("  5. 上期账单 8.0 m³ 全为第一阶梯 3.54 元/m³ → 应缴 28.32 元，与抄表间隔/日数据吻合")
+    print("  6. 当年累计用量应为 148.7 m³（官方已结算 145.0 + 本年度未结算 3.7），")
+    print("     燃气费单价仍为第一阶梯 3.54 元/m³（当年累计未跨 228 m³ 阈值）")
     return 0
 
 

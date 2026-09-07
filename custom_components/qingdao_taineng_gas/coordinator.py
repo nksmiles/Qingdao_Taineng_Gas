@@ -38,6 +38,22 @@ def _mask(value: str, tail: int = 4) -> str:
     return f"*{value[-tail:]}"
 
 
+def _parse_tier_remaining(raw: Any) -> list[float]:
+    """把接口 cycSurplus（如 "83.00|120|99999999"）解析成各档剩余量列表。"""
+    values: list[float] = []
+    if not raw:
+        return values
+    for chunk in str(raw).split("|"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            values.append(float(chunk))
+        except ValueError:
+            _LOGGER.debug("无法解析 cycSurplus 分量：%s", chunk)
+    return values
+
+
 class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """泰能燃气数据协调器。"""
 
@@ -124,7 +140,11 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             official_reading  : 官方读数（上个账期累计表读数，抄表日更新）
             cycle_total       : 本账期累计用量（抄表日之后已结算用量之和）
             estimated_reading : 预计当前读数 = 官方读数 + 本账期累计用量
-                                （保留连续估算值，供能源面板等模板使用）
+                                （保留连续估算值，即「燃气总用量」实体值，供能源面板使用）
+            annual_settled    : 官方年度已结算累计（getBindUserInfo.cycleCreditQty）
+            annual_unbilled   : 本年度内抄表后仍未结算的用量增量
+            annual_usage      : 当年累计用量 = annual_settled + annual_unbilled
+                                （供「当年累计用量」与「燃气费单价」传感器使用）
         """
         if not today:
             today = date.today().isoformat()
@@ -157,19 +177,48 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # 预计当前读数 = 官方读数 + 本账期累计用量（与官方口径对齐的连续估算）
         estimated_reading = round(base_reading + (cycle_total or 0.0), 4)
 
-        # 3) 最近 7 天明细
+        # 3) 年度阶梯相关（泰能民用气按“户·年”累计，每年 1 月 1 日清零）
+        #    官方年度已结算累计 = cycleCreditQty（每月抄表结算后更新，如 145.0）；
+        #    抄表后仍未结算的增量取「与 cycle_total 相同的行过滤 + 仅限本年度」，
+        #    避免跨年时把上一年的量误计入新年（默认账期从抄表次日算起）。
+        year = date.fromisoformat(today).year
+        cyc_end = info.get("cyc_end_date") or ""
+        annual_settled: float | None = None
+        credit = info.get("cycle_credit_qty")
+        if credit is not None:
+            cyc_year = year
+            if len(cyc_end) >= 4 and cyc_end[:4].isdigit():
+                cyc_year = int(cyc_end[:4])
+            # 平台年度计费周期与本年度不一致（年初重置未完成等）时按 0 重新累计
+            annual_settled = round(float(credit), 4) if cyc_year == year else 0.0
+        annual_unbilled = 0.0
+        if base_date and settled_date and settled_date >= base_date:
+            annual_unbilled = round(
+                sum(
+                    r["volume"] for r in settled
+                    if r["date"].startswith(str(year))
+                    and (base_date <= r["date"] if include_base_day else base_date < r["date"])
+                    and r["date"] <= settled_date
+                ),
+                4,
+            )
+        annual_usage: float | None = None
+        if annual_settled is not None:
+            annual_usage = round(annual_settled + annual_unbilled, 4)
+
+        # 4) 最近 7 天明细
         recent = [
             {"date": r["date"], "volume": round(r["volume"], 4)}
             for r in settled[-RECENT_DAYS:]
         ]
 
-        # 4) 全部已结算日的逐日用量（滚动窗口内，用于每日耗气量实体）
+        # 5) 全部已结算日的逐日用量（滚动窗口内，用于每日耗气量实体）
         daily_series = [
             {"date": r["date"], "volume": round(r["volume"], 4)}
             for r in settled
         ]
 
-        # 5) 数据滞后天数
+        # 6) 数据滞后天数
         lag = None
         if settled_date:
             lag = (date.fromisoformat(today) - date.fromisoformat(settled_date)).days
@@ -188,6 +237,14 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "daily_series": daily_series,
             "base_reading": base_reading,   # 兼容别名
             "base_date": base_date,
+            # 年度阶梯（供「当年累计用量」「燃气费单价」传感器）
+            "annual_settled": annual_settled,
+            "annual_unbilled": annual_unbilled,
+            "annual_usage": annual_usage,
+            "annual_cycle_end": cyc_end or None,
+            "annual_cycle_year": year,
+            "annual_ladder": info.get("ladder"),
+            "tier_remaining": _parse_tier_remaining(info.get("cyc_surplus")),
             "user_no": info.get("user_no", ""),
             "meter_no": info.get("meter_no", ""),
             "user_address": info.get("user_address", ""),

@@ -70,6 +70,19 @@ ATTR_RECENT_DAYS = "recent_days"                  # 最近 7 天用量明细
 ATTR_SETTLED_DATE = "settled_date"                # 最后已结算日期
 ATTR_DATA_LAG = "data_lag_days"                   # 数据滞后天数
 
+# ---- 年度阶梯（燃气费单价 / 当年累计用量用）----
+ATTR_ANNUAL_SETTLED = "annual_settled"            # 官方年度已结算累计（cycleCreditQty）
+ATTR_ANNUAL_UNBILLED = "annual_unbilled"          # 本年度内抄表后未结算用量
+ATTR_ANNUAL_CYCLE_END = "annual_cycle_end"        # 年度计费周期结束日（如 2026-12-31）
+ATTR_LADDER = "ladder"                            # 平台当前阶梯（getBindUserInfo.ladder）
+ATTR_TIER = "tier"                                # 按当年累计判定的当前适用档 1/2/3
+ATTR_TIER_NAME = "tier_name"                      # 档名（第一阶梯…）
+ATTR_TIER_THRESHOLDS = "tier_thresholds"          # 各档累计上限
+ATTR_TIER_PRICES = "tier_prices"                  # 各档单价（元/m³）
+ATTR_TIER_REMAINING = "tier_remaining"            # 接口 cycSurplus（各档剩余量）
+ATTR_NEXT_TIER_AT = "next_tier_at"                # 下一档起点累计量
+ATTR_NEXT_TIER_REMAINING = "next_tier_remaining"  # 距下一档还差多少 m³
+
 # ---------------------------------------------------------------
 # 传感器 key（用于 unique_id）
 # ---------------------------------------------------------------
@@ -81,5 +94,42 @@ KEY_DAILY_USAGE = "daily_usage"
 KEY_CYCLE_USAGE = "cycle_usage"
 # 每日耗气量实体系列前缀，unique_id = {entry_id}_daily_series_YYYY-MM-DD
 KEY_DAILY_SERIES = "daily_series_"
+# 燃气总用量（累计读数，供能源面板，total_increasing）
+KEY_TOTAL_GAS = "total_gas_usage"
+# 当年累计用量（户·年累计，1 月 1 日清零，用于核算阶梯计费）
+KEY_ANNUAL_USAGE = "annual_usage"
+# 燃气费单价（当前边际单价，元/m³）
+KEY_GAS_PRICE = "gas_price"
 
 MASK_TAIL_LEN = 4                     # 户号/表号对外展示时保留的末位长度
+
+# ---------------------------------------------------------------
+# 泰能燃气阶梯计价（民用气，户·年累计，每年 1 月 1 日清零）
+#   * 0 – 228 m³（含）   第一阶梯 3.54 元/m³
+#   * 228 – 348 m³（含） 第二阶梯 4.12 元/m³
+#   * > 348 m³           第三阶梯 4.99 元/m³
+# 跨过 228 / 348 阈值后，后续每立方米自动按更高一档计费。
+# 若当地价格政策变化，修改以下三组常量即可。
+# ---------------------------------------------------------------
+GAS_TIER_THRESHOLDS = (228.0, 348.0)      # 各档累计上限（含）
+GAS_TIER_PRICES = (3.54, 4.12, 4.99)      # 元/m³
+GAS_TIER_NAMES = ("第一阶梯", "第二阶梯", "第三阶梯")
+
+
+def tier_for_annual_usage(annual_usage: float | None) -> int | None:
+    """按户·年累计用量判定当前适用的阶梯（1/2/3）。"""
+    if annual_usage is None:
+        return None
+    usage = float(annual_usage)
+    for index, cap in enumerate(GAS_TIER_THRESHOLDS):
+        if usage <= cap:
+            return index + 1
+    return len(GAS_TIER_PRICES)  # 超过所有档位上限 → 最高档
+
+
+def gas_price_for_annual_usage(annual_usage: float | None) -> float | None:
+    """按户·年累计用量得到当前边际单价（下一 m³ 将适用的阶梯价）。"""
+    tier = tier_for_annual_usage(annual_usage)
+    if tier is None:
+        return None
+    return GAS_TIER_PRICES[tier - 1]
