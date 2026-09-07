@@ -408,12 +408,18 @@ class DailyHistorySensor(SensorEntity):
 
     为接口滚动窗口内的每个已结算日生成一个实体（名称含日期），
     某一天结算完成即锁定该值，不会再变化，可直接用于逐日核对与画图。
+
+    注意：不能为 device_class=gas 的实体设置 state_class=measurement
+    （HA 只允许 None / total / total_increasing）。本实体的值是某一天的
+    耗气量快照，创建后即固定、不随时间变化，既非测量值也非累计量，
+    因此不设 state_class（保持默认 None），仅保留 gas 分类用于展示。
     """
 
     _attr_has_entity_name = True
     _attr_native_unit_of_measurement = UNIT
     _attr_device_class = SensorDeviceClass.GAS
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # 刻意不设置 _attr_state_class（保持 None）：
+    # gas device_class 不允许 measurement，详见类注释。
     _attr_suggested_display_precision = 3
     _attr_icon = "mdi:chart-bar"
 
