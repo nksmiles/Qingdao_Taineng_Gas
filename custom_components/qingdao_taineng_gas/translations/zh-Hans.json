@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "青岛泰能燃气",
+        "description": "请输入从微信公众号抓包获取的 SESSION。户号与表号留空将自动获取默认户号。\n注意：本接口仅允许家庭宽带出口访问，云服务器/公司网络/代理环境会被网关拦截。",
+        "data": {
+          "session": "SESSION（必填）",
+          "user_no": "户号（留空自动获取）",
+          "meter_no": "表号（留空自动获取）",
+          "meter_type": "表类型"
+        }
+      },
+      "reauth_confirm": {
+        "title": "更新登录凭据",
+        "description": "SESSION 已失效。请重新抓包获取新的 SESSION 后填入。",
+        "data": {
+          "session": "SESSION"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接服务器。请确认在家庭宽带/HA 局域网内运行，云服务器与公司网络会被网关拦截。",
+      "invalid_auth": "SESSION 无效或已过期，请重新抓包获取。",
+      "meter_not_found": "未找到该户号/表号对应的表具，请留空以自动获取。",
+      "unknown": "发生未知错误，请查看 HA 日志。"
+    },
+    "abort": {
+      "already_configured": "该表具已配置过了。",
+      "reauth_successful": "凭据更新成功。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "泰能燃气选项",
+        "description": "SESSION 过期后可在此直接更新，无需删除集成重新配置。SESSION 留空表示不修改。\n若累计读数与公众号相差「抄表当天用量」，请切换下方的校准开关。",
+        "data": {
+          "session": "新 SESSION（留空不修改）",
+          "meter_type": "表类型",
+          "include_base_day": "官方抄表读数已含抄表当天用量"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接服务器，请检查网络环境。",
+      "invalid_auth": "新的 SESSION 无效，请重新抓包。",
+      "unknown": "发生未知错误，请查看 HA 日志。"
+    }
+  }
+}

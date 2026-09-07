@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Qingdao Taneng Gas",
+        "description": "Enter the SESSION cookie captured from the WeChat official account. Leave user No. and meter No. empty to auto-detect.\nNote: the API only allows residential broadband access; cloud servers, corporate networks and proxies are blocked.",
+        "data": {
+          "session": "SESSION (required)",
+          "user_no": "User No. (auto if empty)",
+          "meter_no": "Meter No. (auto if empty)",
+          "meter_type": "Meter type"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update credentials",
+        "description": "The SESSION has expired. Please capture a new one and enter it below.",
+        "data": {
+          "session": "SESSION"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the server. Make sure Home Assistant runs on a residential broadband connection.",
+      "invalid_auth": "SESSION is invalid or expired. Please capture a new one.",
+      "meter_not_found": "No meter found for the given user No./meter No. Leave them empty to auto-detect.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    },
+    "abort": {
+      "already_configured": "This meter is already configured.",
+      "reauth_successful": "Credentials updated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Taneng Gas options",
+        "description": "Update the SESSION here when it expires — no need to delete and re-add the integration. Leave SESSION empty to keep the current one.\nIf the cumulative reading differs from the official app by exactly one day's usage, toggle the calibration switch below.",
+        "data": {
+          "session": "New SESSION (empty = keep)",
+          "meter_type": "Meter type",
+          "include_base_day": "Official reading already includes that day's usage"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the server. Check your network.",
+      "invalid_auth": "The new SESSION is invalid. Please capture a new one.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    }
+  }
+}
