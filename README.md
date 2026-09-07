@@ -6,7 +6,7 @@
 在 Home Assistant 中按**计费账期**展示用气累计、官方抄表读数与**逐日耗气量**，
 并提供**当年累计用量**与**燃气费单价**，帮你实时核算泰能燃气的**阶梯计费**。
 
-![泰能天然气](custom_components/qingdao_taineng_gas/brand/logo.png)
+<img src="custom_components/qingdao_taineng_gas/brand/logo.png" alt="泰能天然气" height="64">
 
 > 参考项目：[sunfang1cn/hass-hangzhou-ranqi](https://github.com/sunfang1cn/hass-hangzhou-ranqi)（杭州燃气）
 > 本集成沿用其架构，接口与鉴权方式针对青岛泰能（ESLink）重新适配。
