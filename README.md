@@ -51,7 +51,12 @@ cp -r custom_components/qingdao_taineng_gas /config/custom_components/
 
 ### 方式二：HACS 自定义仓库
 
-把本仓库放入 GitHub，HACS → 右上角菜单 → 自定义存储库 → 添加。
+1. HACS → 右上角菜单 → **自定义存储库**
+2. 仓库地址填：`https://github.com/nksmiles/Qingdao_Taineng_Gas`
+3. 类别选择 **集成** → **添加**
+4. HACS → 集成 → 右下角 **下载**，搜索「青岛泰能燃气」安装
+
+添加成功后，后续版本更新 HACS 会自动提示。
 
 ---
 
