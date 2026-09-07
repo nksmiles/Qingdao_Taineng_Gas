@@ -7,19 +7,27 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import EsLinkApi, EsLinkAuthError, EsLinkError
 from .const import (
+    CONF_BASE_QUERY_TIME,
     CONF_INCLUDE_BASE_DAY,
     CONF_METER_NO,
     CONF_METER_TYPE,
+    CONF_QUERY_COUNT,
     CONF_SESSION,
     CONF_USER_NO,
+    DEFAULT_BASE_QUERY_TIME,
     DEFAULT_INCLUDE_BASE_DAY,
     DEFAULT_METER_TYPE,
+    DEFAULT_QUERY_COUNT,
     DOMAIN,
+    QUERY_COUNT_MAX,
+    QUERY_COUNT_MIN,
+    parse_query_time,
+    query_times_for,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,6 +53,25 @@ async def _validate_session(hass, cookie_session: str) -> list[dict[str, Any]]:
     """校验 SESSION 是否有效，返回绑定用户列表。"""
     api = EsLinkApi(async_get_clientsession(hass), cookie_session)
     return await api.get_bind_user_info()
+
+
+def _normalize_query_count(value: Any) -> int | None:
+    """把「每天查询次数」规范化为 1~4 的整数；非法返回 None。"""
+    if value in (None, ""):
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if QUERY_COUNT_MIN <= count <= QUERY_COUNT_MAX else None
+
+
+def _normalize_query_time(value: Any) -> str | None:
+    """把「基础查询时间」规范化为 HH:MM；非法返回 None。"""
+    minutes = parse_query_time(value)
+    if minutes is None:
+        return None
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 class TanengGasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -202,9 +229,33 @@ class TanengGasOptionsFlow(config_entries.OptionsFlow):
                     user_input.get(CONF_INCLUDE_BASE_DAY, DEFAULT_INCLUDE_BASE_DAY)
                 )
 
+                # 每日查询计划：每天查询次数（1~4）+ 基础查询时间
+                query_count = _normalize_query_count(user_input.get(CONF_QUERY_COUNT))
+                if query_count is None:
+                    errors[CONF_QUERY_COUNT] = "invalid_query_count"
+                else:
+                    new_data[CONF_QUERY_COUNT] = query_count
+
+                base_query_time = _normalize_query_time(
+                    user_input.get(CONF_BASE_QUERY_TIME, DEFAULT_BASE_QUERY_TIME)
+                )
+                if base_query_time is None:
+                    errors[CONF_BASE_QUERY_TIME] = "invalid_time"
+                else:
+                    new_data[CONF_BASE_QUERY_TIME] = base_query_time
+
+            if not errors:
                 self.hass.config_entries.async_update_entry(entry, data=new_data)
                 await self.hass.config_entries.async_reload(entry.entry_id)
                 return self.async_create_entry(title="", data={})
+
+        query_count = _normalize_query_count(
+            entry.data.get(CONF_QUERY_COUNT, DEFAULT_QUERY_COUNT)
+        )
+        base_query_time = _normalize_query_time(
+            entry.data.get(CONF_BASE_QUERY_TIME, DEFAULT_BASE_QUERY_TIME)
+        ) or DEFAULT_BASE_QUERY_TIME
+        derived = query_times_for(base_query_time, query_count or DEFAULT_QUERY_COUNT)
 
         return self.async_show_form(
             step_id="init",
@@ -221,7 +272,25 @@ class TanengGasOptionsFlow(config_entries.OptionsFlow):
                             CONF_INCLUDE_BASE_DAY, DEFAULT_INCLUDE_BASE_DAY
                         ),
                     ): bool,
+                    vol.Optional(
+                        CONF_QUERY_COUNT,
+                        default=query_count or DEFAULT_QUERY_COUNT,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=QUERY_COUNT_MIN,
+                            max=QUERY_COUNT_MAX,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_BASE_QUERY_TIME,
+                        default=base_query_time,
+                    ): selector.TimeSelector(),
                 }
             ),
             errors=errors,
+            description_placeholders={
+                "derived_times": "、".join(derived),
+            },
         )

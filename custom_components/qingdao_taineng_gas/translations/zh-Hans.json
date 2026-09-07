@@ -34,17 +34,21 @@
     "step": {
       "init": {
         "title": "泰能燃气选项",
-        "description": "SESSION 过期后可在此直接更新，无需删除集成重新配置。SESSION 留空表示不修改。\n「本账期累计用量」从官方抄表日开始累加。若与公众号本账期数值相差正好是抄表当天的用量，请切换下方的校准开关。",
+        "description": "SESSION 过期后可在此直接更新，无需删除集成重新配置。SESSION 留空表示不修改。\n「本账期累计用量」从官方抄表日开始累加。若与公众号本账期数值相差正好是抄表当天的用量，请切换下方的校准开关。\n查询计划：燃气数据每日才更新，建议每天查询 1–4 次。以「基础查询时间」为基准，其余查询时间按 24 小时均分自动推导，当前将查询于：{derived_times}。",
         "data": {
           "session": "新 SESSION（留空不修改）",
           "meter_type": "表类型",
-          "include_base_day": "官方抄表读数已含抄表当天用量"
+          "include_base_day": "官方抄表读数已含抄表当天用量",
+          "query_count": "每天查询次数（1–4）",
+          "base_query_time": "基础查询时间"
         }
       }
     },
     "error": {
       "cannot_connect": "无法连接服务器，请检查网络环境。",
       "invalid_auth": "新的 SESSION 无效，请重新抓包。",
+      "invalid_query_count": "每天查询次数需为 1–4 的整数。",
+      "invalid_time": "基础查询时间格式无效，请填写 HH:MM（如 06:00）。",
       "unknown": "发生未知错误，请查看 HA 日志。"
     }
   }

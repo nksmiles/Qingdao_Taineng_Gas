@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time as _time
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -13,15 +14,22 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import EsLinkApi, EsLinkAuthError, EsLinkError
 from .const import (
+    CONF_BASE_QUERY_TIME,
     CONF_INCLUDE_BASE_DAY,
     CONF_METER_NO,
     CONF_METER_TYPE,
+    CONF_QUERY_COUNT,
     CONF_SESSION,
     CONF_USER_NO,
+    DEFAULT_BASE_QUERY_TIME,
     DEFAULT_INCLUDE_BASE_DAY,
     DEFAULT_METER_TYPE,
+    DEFAULT_QUERY_COUNT,
     DOMAIN,
-    UPDATE_INTERVAL,
+    QUERY_COUNT_MAX,
+    QUERY_COUNT_MIN,
+    parse_query_time,
+    query_times_for,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +62,25 @@ def _parse_tier_remaining(raw: Any) -> list[float]:
     return values
 
 
+def next_scheduled_run(times: list[str], now: datetime) -> datetime:
+    """返回查询时刻表里「下一个」触发时刻（严格晚于 now 的本地时间）。
+
+    :param times: query_times_for() 推导出的 HH:MM 列表（升序）
+    :param now:   当前时刻（naive / aware 均可，按本地墙钟比较）
+    """
+    minutes = sorted(m for m in (parse_query_time(t) for t in times) if m is not None)
+    if not minutes:
+        minutes = [0]
+    current = now.hour * 60 + now.minute
+    for m in minutes:
+        if m > current:
+            return now.replace(hour=m // 60, minute=m % 60, second=0, microsecond=0)
+    tomorrow = now + timedelta(days=1)
+    return tomorrow.replace(
+        hour=minutes[0] // 60, minute=minutes[0] % 60, second=0, microsecond=0
+    )
+
+
 class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """泰能燃气数据协调器。"""
 
@@ -62,11 +89,15 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.entry = entry
         self.user_info: dict[str, Any] = {}
+        # 查询计划的定时器与当日次数计数（配合 update_interval=None 自管调度）
+        self._unsub_query_timer: Any | None = None
+        self._query_day: str = ""
+        self._query_seq: int = 0
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=UPDATE_INTERVAL,
+            update_interval=None,  # 由每日查询计划调度，见 start_query_schedule()
         )
 
     @property
@@ -77,15 +108,128 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     # ------------------------------------------------------------------
+    # 每日查询计划（基础时间 + 每天次数 → 自动均分全天，见 const.query_times_for）
+    # ------------------------------------------------------------------
+    @property
+    def query_count(self) -> int:
+        """每天查询次数（钳制在 1~4）。"""
+        data = getattr(self.entry, "data", {})
+        try:
+            count = int(data.get(CONF_QUERY_COUNT, DEFAULT_QUERY_COUNT))
+        except (TypeError, ValueError):
+            count = DEFAULT_QUERY_COUNT
+        return max(QUERY_COUNT_MIN, min(QUERY_COUNT_MAX, count))
+
+    @property
+    def base_query_time(self) -> str:
+        """基础查询时间（规范化 HH:MM）。"""
+        data = getattr(self.entry, "data", {})
+        minutes = parse_query_time(data.get(CONF_BASE_QUERY_TIME, DEFAULT_BASE_QUERY_TIME))
+        if minutes is None:
+            minutes = parse_query_time(DEFAULT_BASE_QUERY_TIME) or 0
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+    def query_times(self) -> list[str]:
+        """按基础时间 + 次数推导出的当天查询时刻（HH:MM，升序）。"""
+        return query_times_for(self.base_query_time, self.query_count)
+
+    def start_query_schedule(self) -> None:
+        """在配置条目加载完成后启用每日查询计划。"""
+        _LOGGER.info(
+            "查询计划已启用：每天 %d 次，基础时间 %s，自动分配时刻：%s",
+            self.query_count,
+            self.base_query_time,
+            "、".join(self.query_times()),
+        )
+        self._schedule_next_query()
+
+    def _schedule_next_query(self) -> None:
+        """排定下一次查询（先取消防抖，再按查询时刻对齐）。"""
+        # 延迟导入：离线工具只调用 _compute，不依赖这些 HA 运行时模块
+        from homeassistant.helpers.event import async_track_point_in_utc_time
+        from homeassistant.util import dt as dt_util
+
+        self._cancel_query_timer()
+        run_local = next_scheduled_run(self.query_times(), dt_util.now())
+        _LOGGER.debug(
+            "已安排下次查询：%s（每日 %d 次：%s）",
+            run_local.strftime("%Y-%m-%d %H:%M"),
+            self.query_count,
+            "、".join(self.query_times()),
+        )
+        self._unsub_query_timer = async_track_point_in_utc_time(
+            self.hass, self._fire_query_timer, dt_util.as_utc(run_local)
+        )
+
+    def _cancel_query_timer(self) -> None:
+        if self._unsub_query_timer is not None:
+            self._unsub_query_timer()
+            self._unsub_query_timer = None
+
+    def _fire_query_timer(self, _now) -> None:
+        """定时器到点：先排下一次，再触发一次刷新。"""
+        self._unsub_query_timer = None
+        self.hass.async_create_task(self._run_scheduled_query())
+
+    async def _run_scheduled_query(self) -> None:
+        # 无论本次成功与否都先把下一次排上，避免失败后计划中断
+        self._schedule_next_query()
+        await self.async_request_refresh()
+
+    def _next_query_display(self) -> str:
+        """下一次查询时间的展示文本（日志用）。"""
+        try:
+            from homeassistant.util import dt as dt_util
+
+            run_local = next_scheduled_run(self.query_times(), dt_util.now())
+            return run_local.strftime("%Y-%m-%d %H:%M")
+        except Exception:  # noqa: BLE001
+            return "-"
+
+    def _bump_query_seq(self) -> int:
+        """返回今天是第几次查询（跨日自动从 1 重新计数）。"""
+        today = date.today().isoformat()
+        if self._query_day != today:
+            self._query_day = today
+            self._query_seq = 1
+        else:
+            self._query_seq += 1
+        return self._query_seq
+
+    def _log_target(self) -> str:
+        """日志里标识本次查询对象的表号（脱敏，未有数据前用配置值）。"""
+        if self.user_info.get("meter_no"):
+            return self.masked_meter_no()
+        raw = getattr(self.entry, "data", {}).get(CONF_METER_NO) or ""
+        return _mask(str(raw))
+
+    async def async_shutdown(self) -> None:
+        """卸载集成时取消查询计划定时器。"""
+        self._cancel_query_timer()
+        await super().async_shutdown()
+
+    # ------------------------------------------------------------------
     async def _async_update_data(self) -> dict[str, Any]:
-        """拉取并计算全部数据。"""
+        """拉取并计算全部数据（每次真实查询都会在日志中记录）。"""
         api = self._api
+        seq = self._bump_query_seq()
+        target = self._log_target()
+        started = _time.monotonic()
+        _LOGGER.info(
+            "开始查询燃气数据：今日第 %d/%d 次（表号 %s）",
+            seq,
+            self.query_count,
+            target or "未知",
+        )
+
         try:
             # 1) 户号 / 表号 / 官方表读数（每次都拉，便于发现绑定变更与读数刷新）
             users = await api.get_bind_user_info()
         except EsLinkAuthError as err:
+            _LOGGER.warning("第 %d 次查询失败（%s）：SESSION 已失效：%s", seq, target or "未知", err)
             raise ConfigEntryAuthFailed(f"登录凭据已失效，请更新 SESSION：{err}") from err
         except EsLinkError as err:
+            _LOGGER.warning("第 %d 次查询失败（%s，下次 %s）：%s", seq, target or "未知", self._next_query_display(), err)
             raise UpdateFailed(f"获取户号信息失败：{err}") from err
 
         user_no = self.entry.data.get(CONF_USER_NO) or ""
@@ -105,17 +249,32 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             info = next((u for u in users if u["is_default"]), users[0])
 
         self.user_info = info
+        target = self._log_target()
 
         meter_type = self.entry.data.get(CONF_METER_TYPE) or info.get("meter_type") or DEFAULT_METER_TYPE
 
         try:
             rows = await api.get_daily_usage(info["user_no"], info["meter_no"], meter_type)
         except EsLinkAuthError as err:
+            _LOGGER.warning("第 %d 次查询失败（%s）：SESSION 已失效：%s", seq, target or "未知", err)
             raise ConfigEntryAuthFailed(f"登录凭据已失效，请更新 SESSION：{err}") from err
         except EsLinkError as err:
+            _LOGGER.warning("第 %d 次查询失败（%s，下次 %s）：%s", seq, target or "未知", self._next_query_display(), err)
             raise UpdateFailed(f"获取用量数据失败：{err}") from err
 
-        return self._compute(info, rows)
+        result = self._compute(info, rows)
+        _LOGGER.info(
+            "第 %d/%d 次查询完成：表号 %s，数据截至 %s（滞后 %s 天），"
+            "用时 %.1f 秒，下次查询 %s",
+            seq,
+            self.query_count,
+            target or "未知",
+            result.get("settled_date") or "-",
+            result.get("data_lag_days") if result.get("data_lag_days") is not None else "-",
+            _time.monotonic() - started,
+            self._next_query_display(),
+        )
+        return result
 
     # ------------------------------------------------------------------
     def _compute(

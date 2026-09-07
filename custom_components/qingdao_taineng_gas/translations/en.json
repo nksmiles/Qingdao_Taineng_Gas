@@ -34,17 +34,21 @@
     "step": {
       "init": {
         "title": "Taneng Gas options",
-        "description": "Update the SESSION here when it expires — no need to delete and re-add the integration. Leave SESSION empty to keep the current one.\n\"Current billing cycle usage\" is accumulated from the official meter-read date. If it differs from the official app by exactly that day's usage, toggle the calibration switch below.",
+        "description": "Update the SESSION here when it expires — no need to delete and re-add the integration. Leave SESSION empty to keep the current one.\n\"Current billing cycle usage\" is accumulated from the official meter-read date. If it differs from the official app by exactly that day's usage, toggle the calibration switch below.\nQuery plan: gas data only updates daily, so keep 1–4 queries per day. Other query times are derived by dividing the 24 h evenly around the base time; the current schedule is: {derived_times}.",
         "data": {
           "session": "New SESSION (empty = keep)",
           "meter_type": "Meter type",
-          "include_base_day": "Official reading already includes that day's usage"
+          "include_base_day": "Official reading already includes that day's usage",
+          "query_count": "Queries per day (1–4)",
+          "base_query_time": "Base query time"
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot reach the server. Check your network.",
       "invalid_auth": "The new SESSION is invalid. Please capture a new one.",
+      "invalid_query_count": "Queries per day must be an integer between 1 and 4.",
+      "invalid_time": "Invalid base query time. Use HH:MM (e.g. 06:00).",
       "unknown": "Unexpected error. Check the Home Assistant log."
     }
   }

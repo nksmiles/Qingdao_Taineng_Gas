@@ -4,7 +4,8 @@
 """
 from __future__ import annotations
 
-from datetime import timedelta
+import re
+from typing import Any
 
 DOMAIN = "qingdao_taineng_gas"
 DEFAULT_NAME = "泰能燃气"
@@ -32,11 +33,18 @@ DEFAULT_METER_TYPE = "17"           # 民用 NB-IoT 物联网表
 DEFAULT_TIMEOUT = 20                # 秒
 
 # ---------------------------------------------------------------
-# 调度与限制
+# 调度与限制（每日查询计划，v1.2.2 起可在选项里配置）
 # ---------------------------------------------------------------
-# 燃气数据每日才更新一次，6 小时足够。
-# 严禁分钟级轮询 —— 会触发风控。
-UPDATE_INTERVAL = timedelta(hours=6)
+# 燃气数据每日才更新一次，严禁分钟级轮询 —— 会触发风控。
+# 用户通过选项设置「每天查询次数」（1~4）与「基础查询时间」，
+# 其余查询时间按一天 24 小时均分自动推导（间隔 = 24h / 次数），
+# 例如 4 次 + 基础 06:00 → 06:00 / 12:00 / 18:00 / 次日 00:00。
+CONF_QUERY_COUNT = "query_count"            # 每天查询次数（1~4）
+CONF_BASE_QUERY_TIME = "base_query_time"    # 基础查询时间（HH:MM）
+QUERY_COUNT_MIN = 1
+QUERY_COUNT_MAX = 4
+DEFAULT_QUERY_COUNT = 4
+DEFAULT_BASE_QUERY_TIME = "06:00"
 
 # ---------------------------------------------------------------
 # 配置键
@@ -133,3 +141,62 @@ def gas_price_for_annual_usage(annual_usage: float | None) -> float | None:
     if tier is None:
         return None
     return GAS_TIER_PRICES[tier - 1]
+
+
+# ---------------------------------------------------------------
+# 查询计划工具（基础时间 + 每天次数 → 每天的查询时刻）
+# ---------------------------------------------------------------
+def parse_query_time(value: Any) -> int | None:
+    """把基础查询时间解析成当日分钟数（00:00 起）。
+
+    兼容 ``time`` 对象与 ``HH:MM`` / ``H:MM`` / ``HH:MM:SS`` 字符串；
+    解析失败返回 None。
+    """
+    if value is None:
+        return None
+    hour = getattr(value, "hour", None)
+    if hour is not None:
+        minute = getattr(value, "minute", 0)
+        return hour * 60 + minute
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::\d{1,2})?", text)
+    if not match:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return hour * 60 + minute
+    return None
+
+
+def _format_minutes_of_day(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _clamp_query_count(value: Any) -> int:
+    """把每天查询次数钳制在合法区间 1~4。"""
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = DEFAULT_QUERY_COUNT
+    return max(QUERY_COUNT_MIN, min(QUERY_COUNT_MAX, count))
+
+
+def query_times_for(
+    base_query_time: Any = DEFAULT_BASE_QUERY_TIME,
+    query_count: Any = DEFAULT_QUERY_COUNT,
+) -> list[str]:
+    """推导每天的查询时刻（HH:MM，升序去重）。
+
+    规则：以基础查询时间对齐，把 24 小时按次数均分
+    （间隔 = 24h / 次数），其余时刻自动依次后移。
+    例如 4 次 + 06:00 → 00:00 / 06:00 / 12:00 / 18:00。
+    """
+    count = _clamp_query_count(query_count)
+    base = parse_query_time(base_query_time)
+    if base is None:
+        base = parse_query_time(DEFAULT_BASE_QUERY_TIME) or 0
+    step = 24 * 60 // count
+    minutes = sorted({(base + offset * step) % (24 * 60) for offset in range(count)})
+    return [_format_minutes_of_day(m) for m in minutes]
