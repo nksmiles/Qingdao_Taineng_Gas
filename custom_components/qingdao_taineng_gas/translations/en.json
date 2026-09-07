@@ -34,7 +34,7 @@
     "step": {
       "init": {
         "title": "Taneng Gas options",
-        "description": "Update the SESSION here when it expires — no need to delete and re-add the integration. Leave SESSION empty to keep the current one.\nIf the cumulative reading differs from the official app by exactly one day's usage, toggle the calibration switch below.",
+        "description": "Update the SESSION here when it expires — no need to delete and re-add the integration. Leave SESSION empty to keep the current one.\n\"Current billing cycle usage\" is accumulated from the official meter-read date. If it differs from the official app by exactly that day's usage, toggle the calibration switch below.",
         "data": {
           "session": "New SESSION (empty = keep)",
           "meter_type": "Meter type",

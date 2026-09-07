@@ -197,11 +197,10 @@ class EsLinkApi:
 
         :param month: YYYY-MM，默认当前月。
 
-        重要：实测该接口返回的是「滚动窗口」而非自然月 ——
-        请求 time=2026-09 返回 2026-08-01 ~ 2026-09-06（37 条），
-        请求 time=2026-08 返回 2026-08-01 ~ 2026-09-01（32 条），
-        两者起点相同（今天往前推 36 天），与 time 参数无关。
-        因此永远传当前月，并取 readingTime 最大的一条作为最新数据。
+        重要：实测该接口返回的是「滚动窗口」而非自然月（起点 ≈ 今天往前 37 天），
+        窗口与 time 参数月份关系不大，因此**永远传当前月**。
+        响应包含当天那条（volume=0，未结算），由协调器按 date < 今天 过滤，
+        逐日数据可直接获取（tools/test_cumulative_reading.py --online 可在线核对）。
         """
         if month is None:
             month = date.today().strftime("%Y-%m")

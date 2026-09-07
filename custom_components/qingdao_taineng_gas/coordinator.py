@@ -113,15 +113,21 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         :param today: 参考日期（ISO 格式）。默认取当天；
             测试时可显式传入，使离线验证不依赖运行时的真实日期。
 
-        累计表读数算法说明：
-            官方表读数（meterReading）仅在每月抄表日更新，若直接暴露该值，
-            两次抄表之间会有近 30 天数据纹丝不动，能源面板会出现长平台期。
-            因此这里以「官方读数 + 抄表日之后所有已结算日用量之和」作为
-            实时估算的累计读数，既连续又与官方口径对齐。
+        计费口径说明（已结合泰能燃气“非自然月”计费特性）：
+            泰能每月在月末抄表结算一次，抄表日即上个账期的结算截止日。
+            官方读数（meterReading）@ 抄表日 = 上个账期结算的累计表读数；
+            抄表日之后逐日结算的用量，累加形成「本账期累计用量」。
+            抄表日当天用量是否已计入官方读数无法从接口判断，
+            因此「本账期」起算点由 include_base_day 开关控制（见 const.py 注释）。
+
+        各传感器数值：
+            official_reading  : 官方读数（上个账期累计表读数，抄表日更新）
+            cycle_total       : 本账期累计用量（抄表日之后已结算用量之和）
+            estimated_reading : 预计当前读数 = 官方读数 + 本账期累计用量
+                                （保留连续估算值，供能源面板等模板使用）
         """
         if not today:
             today = date.today().isoformat()
-        current_month = today[:7]
 
         # 数据滞后一天：当天那条通常为 0（未结算），故排除当天
         settled = [r for r in rows if r["date"] < today]
@@ -132,38 +138,35 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         daily_volume = last_settled["volume"] if last_settled else None
         daily_amount = last_settled["amount"] if last_settled else None
 
-        # 2) 累计表读数 = 官方读数 + 抄表日之后的已结算用量之和
-        #    注意：官方读数是否已含抄表当天用量无法从接口判断，
-        #    故提供 include_base_day 选项供校准（见 const.py 注释）。
+        # 2) 官方读数（上个账期结算值）与本账期累计用量
         base_reading = info.get("meter_reading") or 0.0
         base_date = info.get("meter_reading_date")
         include_base_day = bool(
             getattr(self.entry, "data", {}).get(CONF_INCLUDE_BASE_DAY, DEFAULT_INCLUDE_BASE_DAY)
         )
-        if base_date and settled_date:
-            delta = sum(
-                r["volume"] for r in settled
-                if (base_date <= r["date"] if include_base_day else base_date < r["date"])
-                and r["date"] <= settled_date
+        cycle_total = None
+        if base_date and settled_date and settled_date >= base_date:
+            cycle_total = round(
+                sum(
+                    r["volume"] for r in settled
+                    if (base_date <= r["date"] if include_base_day else base_date < r["date"])
+                    and r["date"] <= settled_date
+                ),
+                4,
             )
-        else:
-            # 无官方抄表日期时，无法累加，仅用官方值
-            delta = 0.0
-        cumulative = round(base_reading + delta, 4)
+        # 预计当前读数 = 官方读数 + 本账期累计用量（与官方口径对齐的连续估算）
+        estimated_reading = round(base_reading + (cycle_total or 0.0), 4)
 
-        # 3) 本月累计（仅统计已结算日）
-        month_total = round(
-            sum(
-                r["volume"] for r in settled
-                if r["date"].startswith(current_month)
-            ),
-            4,
-        )
-
-        # 4) 最近 7 天明细
+        # 3) 最近 7 天明细
         recent = [
             {"date": r["date"], "volume": round(r["volume"], 4)}
             for r in settled[-RECENT_DAYS:]
+        ]
+
+        # 4) 全部已结算日的逐日用量（滚动窗口内，用于每日耗气量实体）
+        daily_series = [
+            {"date": r["date"], "volume": round(r["volume"], 4)}
+            for r in settled
         ]
 
         # 5) 数据滞后天数
@@ -172,14 +175,18 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lag = (date.fromisoformat(today) - date.fromisoformat(settled_date)).days
 
         return {
-            "cumulative_reading": cumulative,
+            "official_reading": base_reading,
+            "estimated_reading": estimated_reading,
+            "cycle_total": cycle_total,
+            "cycle_start": base_date,
+            "cycle_end": settled_date,
             "daily_usage": daily_volume,
             "daily_amount": daily_amount,
-            "month_total": month_total,
             "settled_date": settled_date,
             "data_lag_days": lag,
             "recent_days": recent,
-            "base_reading": base_reading,
+            "daily_series": daily_series,
+            "base_reading": base_reading,   # 兼容别名
             "base_date": base_date,
             "user_no": info.get("user_no", ""),
             "meter_no": info.get("meter_no", ""),
