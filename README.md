@@ -1,6 +1,6 @@
 # 青岛泰能燃气 · Home Assistant 集成
 
-![版本](https://img.shields.io/badge/version-1.2.2-blue)
+![版本](https://img.shields.io/badge/version-1.2.3-blue)
 
 从微信公众号「泰能天然气有限公司」背后的 **ESLink 易联云** 平台读取燃气数据，
 在 Home Assistant 中按**计费账期**展示用气累计、官方抄表读数与**逐日耗气量**，

@@ -166,12 +166,15 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._unsub_query_timer()
             self._unsub_query_timer = None
 
-    def _fire_query_timer(self, _now) -> None:
-        """定时器到点：先排下一次，再触发一次刷新。"""
-        self._unsub_query_timer = None
-        self.hass.async_create_task(self._run_scheduled_query())
+    async def _fire_query_timer(self, _now) -> None:
+        """定时器到点：先排下一次，再触发一次刷新。
 
-    async def _run_scheduled_query(self) -> None:
+        必须为协程（async def）：HA 事件系统只会在事件循环内执行
+        coroutine / @callback 类型的 job，普通同步函数会被当作 Executor job
+        丢到线程池运行，导致在此处调用 async API（async_create_task / await）
+        失效 —— 表现为「coroutine ... was never awaited」且本次查询未执行。
+        """
+        self._unsub_query_timer = None
         # 无论本次成功与否都先把下一次排上，避免失败后计划中断
         self._schedule_next_query()
         await self.async_request_refresh()
