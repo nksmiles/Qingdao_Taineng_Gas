@@ -349,6 +349,14 @@ cards:
         !important; letter-spacing: .06em; text-transform: uppercase; }
         .subtitle { color: #8792a6 !important; font-size: 12px !important; }
   - type: custom:apexcharts-card
+    # ★关键：data_generator 只负责“给数据”，能显示哪一段由 graph_span 决定。
+    #   默认 graph_span 只有 24h，14 天的数据点会全部落在窗口外，
+    #   表现就是 x 轴变成 16:00~13:00 的时间轴、只剩一根柱或空白。
+    graph_span: 15d
+    span:
+      end: day
+    show:
+      loading: false
     header:
       show: true
       title: 日用量 (m³)
@@ -371,7 +379,8 @@ cards:
       tooltip:
         theme: dark
         x:
-          format: yy年M月d日
+          # 四位年份要用 yyyy；写成 yy 只会显示 "26年"
+          format: yyyy年M月d日
       dataLabels:
         enabled: false
       yaxis:
@@ -380,9 +389,13 @@ cards:
           style:
             colors: '#8792a6'
       xaxis:
+        type: datetime
+        tickAmount: 7
         tooltip:
           enabled: false
         labels:
+          # 日粒度标签用「月-日」；不写会默认显示 16:00 这类时刻
+          format: MM-dd
           style:
             colors: '#8792a6'
       plotOptions:
@@ -396,10 +409,18 @@ cards:
         type: column
         unit: ' m³'
         color: '#88c0d0'
-        data_generator: >-
-          const r=entity.attributes.recent_days||[];return
-          r.map(x=>[new Date(x.date).getTime(),Number(x.volume||0)]).sort((a,b)=>a[0]-b[0]);
-        extend_to: false
+        # 用 | （保留换行的块标量）写 JS，比 >- 折叠更不易出错；
+        # 日期用正则取出 年/月/日 再 new Date(...)，按本地时区 00:00 落到当天。
+        data_generator: |
+          const r = entity.attributes.recent_days || [];
+          return r
+            .map((x) => {
+              const m = String(x.date).match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+              if (!m) return null;
+              return [new Date(+m[1], +m[2] - 1, +m[3]).getTime(), Number(x.volume || 0)];
+            })
+            .filter((p) => p && !isNaN(p[0]))
+            .sort((a, b) => a[0] - b[0]);
     card_mod:
       style: |
         ha-card { background: none !important; box-shadow: none !important; border: none !important;
@@ -424,6 +445,13 @@ cards:
         !important; letter-spacing: .06em; text-transform: uppercase; }
         .subtitle { color: #8792a6 !important; font-size: 12px !important; }
   - type: custom:apexcharts-card
+    # ★同上：月度数据跨度是整年，必须把窗口放大到 12 个月，
+    #   否则默认 24h 窗口内一个点都没有 → 一直转圈显示 Loading...
+    graph_span: 12mo
+    span:
+      start: year
+    show:
+      loading: false
     header:
       show: true
       title: 月用量 (m³)
@@ -450,14 +478,18 @@ cards:
       dataLabels:
         enabled: false
       yaxis:
-        decimalsInFloat: 0
+        decimalsInFloat: 1
         labels:
           style:
             colors: '#8792a6'
       xaxis:
+        type: datetime
+        tickAmount: 6
         tooltip:
           enabled: false
         labels:
+          # 月粒度标签用「M月」
+          format: M月
           style:
             colors: '#8792a6'
       plotOptions:
@@ -471,10 +503,18 @@ cards:
         type: column
         unit: ' m³'
         color: '#81a1c1'
-        data_generator: >-
-          const r=entity.attributes.monthly||[];return r.filter(x=>x.month).map(x=>[new
-          Date(x.month+'-01').getTime(),Number(x.volume||0)]).sort((a,b)=>a[0]-b[0]);
-        extend_to: false
+        # monthly 里的 month 可能是 2026-08 / 2026-08-31 / 2026年8月，
+        # 用正则取出「年 + 月」，避免 new Date('2026年8月-01') 这种无效日期导致空图。
+        data_generator: |
+          const r = entity.attributes.monthly || [];
+          return r
+            .map((x) => {
+              const m = String(x.month).match(/(\d{4})\D*(\d{1,2})/);
+              if (!m) return null;
+              return [new Date(+m[1], +m[2] - 1, 1).getTime(), Number(x.volume || 0)];
+            })
+            .filter((p) => p && !isNaN(p[0]))
+            .sort((a, b) => a[0] - b[0]);
     card_mod:
       style: |
         ha-card { background: none !important; box-shadow: none !important; border: none !important;
@@ -488,27 +528,36 @@ cards:
         .apexcharts-xaxistooltip { display: none !important; }
 
 # =====================================================================
-# 外层容器样式（Nord 深色玻璃拟态）。若整卡嵌进已有 dashboard，可整段删掉，
-# 或把 width 改成 100% 让它自动铺满。
+# 外层容器样式：Nord 深色 + 整体背景色。
+#   ⚠️ vertical-stack 内部**没有 ha-card 元素**，所以外层样式必须写在 :host / #root 上；
+#      之前写成 ha-card 是匹配不到任何元素的（这正是背景色不生效的原因）。
+#   想换整体底色，只改下面的 --tn-bg-card 一行即可；
+#   把 width 改成 100% 可让它自动铺满整列。
 # =====================================================================
 card_mod:
   style: |
-    ha-card {
+    :host {
+      /* ★整体背景色：换底色只改这一行 */
+      --tn-bg-card: #0d1526;
+      display: block;
       width: min(100%, 600px);
       margin: 0 auto;
-      padding: 18px 18px 14px;
       color: #d8dee9;
       background:
-        radial-gradient(circle at 18% 0%, rgba(136,192,208,0.14), transparent 35%),
-        radial-gradient(circle at 100% 16%, rgba(180,142,173,0.10), transparent 30%),
-        linear-gradient(145deg, rgba(12,19,35,0.85), rgba(6,10,20,0.85));
-      backdrop-filter: blur(24px) saturate(1.35);
-      -webkit-backdrop-filter: blur(24px) saturate(1.35);
+        radial-gradient(circle at 18% 0%, rgba(136,192,208,0.16), transparent 38%),
+        radial-gradient(circle at 100% 14%, rgba(180,142,173,0.10), transparent 32%),
+        linear-gradient(150deg, rgba(19,28,48,0.98) 0%, var(--tn-bg-card) 55%, rgba(7,11,20,0.98) 100%);
       border: 1px solid rgba(216,222,233,0.16);
       border-radius: 28px;
-      box-shadow: 0 18px 48px rgba(0,0,0,0.38), inset 0 1px 0 rgba(236,239,244,0.11);
+      box-shadow: 0 18px 48px rgba(0,0,0,0.45), inset 0 1px 0 rgba(236,239,244,0.09);
       overflow: hidden;
     }
+    /* 内边距放在 stack 的根节点上，保证子卡片与圆角之间有留白 */
+    #root {
+      padding: 18px 18px 12px;
+      background: transparent;
+    }
     @media (max-width: 520px) {
-      ha-card { margin: 0 auto; padding: 14px 12px 10px; border-radius: 24px; }
+      #root { padding: 14px 12px 10px; }
+      :host { border-radius: 24px; }
     }

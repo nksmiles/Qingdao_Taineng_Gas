@@ -1,6 +1,6 @@
 # 青岛泰能燃气 · Home Assistant 集成
 
-![版本](https://img.shields.io/badge/version-1.3.0-blue)
+![版本](https://img.shields.io/badge/version-1.3.1-blue)
 
 从微信公众号「泰能天然气有限公司」背后的 **ESLink 易联云** 平台读取燃气数据，
 在 Home Assistant 中按**计费账期**展示用气累计、官方抄表读数与**逐日耗气量**，
@@ -120,7 +120,10 @@
 1. 安装上表 ✅ 的三个前端卡片（HACS → 前端）；
 2. 打开 `dashboard/qingdao_taineng_gas_cards.yaml`，**把所有 `ty_1234` 替换成你实际的实体前缀**
    （在「开发者工具 → 状态」里搜索"用气 / 燃气 / 泰能"即可看到完整实体 ID）；
-3. 编辑仪表盘 → 添加卡片 → 手动 → 粘贴整段 YAML。
+3. 编辑仪表盘 → 添加卡片 → 手动 → 粘贴整段 YAML；
+4. 若两张趋势图**只显示一根柱**或一直显示 `Loading...`，多半是 `graph_span` 被改小或漏掉了：
+   两张图的数据跨度分别是 **14 天**与 **12 个月**，而 `apexcharts-card` 默认窗口只有 24 小时，
+   装不下这些数据点。请与仓库中的示例保持一致（`graph_span: 15d` / `graph_span: 12mo`）。
 
 > 卡片中的数值均取自本集成实体的**状态与属性**，不依赖任何自建模板传感器：
 > `recent_days`（最近 14 天）、`monthly`（当年逐月）、`tier_remaining`（三档剩余量）等。
