@@ -40,6 +40,7 @@ from .const import (
     ATTR_LADDER,
     ATTR_METER_NO,
     ATTR_METER_READING_DATE,
+    ATTR_MONTHLY,
     ATTR_NEXT_TIER_AT,
     ATTR_NEXT_TIER_REMAINING,
     ATTR_READING_DATE,
@@ -338,6 +339,9 @@ class AnnualUsageSensor(TanengGasBaseEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs = self._common_attributes()
         attrs.update(_annual_tier_attributes(self._data))
+        # 当年逐月用量：[{month: '2026-08', volume: 12.3}, ...]，
+        # 供卡片画「当年已出账单各月趋势」柱状图
+        attrs[ATTR_MONTHLY] = self._data.get("monthly_series", [])
         return attrs
 
 

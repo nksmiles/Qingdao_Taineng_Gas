@@ -34,7 +34,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-RECENT_DAYS = 7
+# 「最近一日用量」传感器 recent_days 属性保留的天数（供卡片画 14 天趋势图）
+RECENT_DAYS = 14
 
 
 def _mask(value: str, tail: int = 4) -> str:
@@ -265,7 +266,15 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("第 %d 次查询失败（%s，下次 %s）：%s", seq, target or "未知", self._next_query_display(), err)
             raise UpdateFailed(f"获取用量数据失败：{err}") from err
 
-        result = self._compute(info, rows)
+        # 3) 当年逐月用量（type=year），用于「当年已出账单各月趋势」卡片。
+        #    该接口失败不影响主流程（逐日用量的核心数据仍可用），故单独兜底。
+        months: list[dict[str, Any]] = []
+        try:
+            months = await api.get_monthly_usage(info["user_no"], info["meter_no"], meter_type)
+        except EsLinkError as err:
+            _LOGGER.warning("第 %d 次查询：月用量获取失败（不影响日用量）：%s", seq, err)
+
+        result = self._compute(info, rows, months=months)
         _LOGGER.info(
             "第 %d/%d 次查询完成：表号 %s，数据截至 %s（滞后 %s 天），"
             "用时 %.1f 秒，下次查询 %s",
@@ -284,10 +293,13 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         info: dict[str, Any],
         rows: list[dict[str, Any]],
+        months: list[dict[str, Any]] | None = None,
         today: str | None = None,
     ) -> dict[str, Any]:
         """根据官方表读数与日用量，计算各传感器数值。
 
+        :param months: 月粒度用量（api.get_monthly_usage 的返回），
+            用于生成「当年逐月用量」趋势数据；缺失时按月为空列表处理。
         :param today: 参考日期（ISO 格式）。默认取当天；
             测试时可显式传入，使离线验证不依赖运行时的真实日期。
 
@@ -307,6 +319,8 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             annual_unbilled   : 本年度内抄表后仍未结算的用量增量
             annual_usage      : 当年累计用量 = annual_settled + annual_unbilled
                                 （供「当年累计用量」与「燃气费单价」传感器使用）
+            recent_days       : 最近 14 天逐日用量明细
+            monthly_series    : 当年逐月用量明细（月度趋势卡片用）
         """
         if not today:
             today = date.today().isoformat()
@@ -368,10 +382,17 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if annual_settled is not None:
             annual_usage = round(annual_settled + annual_unbilled, 4)
 
-        # 4) 最近 7 天明细
+        # 4) 最近 14 天明细（供「最近一日用量」实体的 recent_days 属性 / 趋势卡片）
         recent = [
             {"date": r["date"], "volume": round(r["volume"], 4)}
             for r in settled[-RECENT_DAYS:]
+        ]
+
+        # 4.1) 当年逐月用量（仅保留本年度已出账月份），供月度趋势卡片使用
+        monthly_series = [
+            {"month": m["month"], "volume": round(float(m["volume"]), 4)}
+            for m in (months or [])
+            if str(m.get("month", "")).startswith(str(year)) and m.get("volume") is not None
         ]
 
         # 5) 全部已结算日的逐日用量（滚动窗口内，用于每日耗气量实体）
@@ -397,6 +418,7 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "data_lag_days": lag,
             "recent_days": recent,
             "daily_series": daily_series,
+            "monthly_series": monthly_series,
             "base_reading": base_reading,   # 兼容别名
             "base_date": base_date,
             # 年度阶梯（供「当年累计用量」「燃气费单价」传感器）

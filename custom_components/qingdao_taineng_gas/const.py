@@ -74,7 +74,8 @@ ATTR_BASE_READING = "base_reading"                # 官方抄表读数（上个�
 ATTR_ESTIMATED_READING = "estimated_reading"      # 预计当前读数（官方读数+本账期用量）
 ATTR_CYCLE_START = "cycle_start"                  # 本账期起始日（=官方抄表日）
 ATTR_CYCLE_END = "cycle_end"                      # 本账期已结算到的日期
-ATTR_RECENT_DAYS = "recent_days"                  # 最近 7 天用量明细
+ATTR_RECENT_DAYS = "recent_days"                  # 最近 14 天用量明细
+ATTR_MONTHLY = "monthly"                          # 当年逐月用量明细（供月度趋势图）
 ATTR_SETTLED_DATE = "settled_date"                # 最后已结算日期
 ATTR_DATA_LAG = "data_lag_days"                   # 数据滞后天数
 

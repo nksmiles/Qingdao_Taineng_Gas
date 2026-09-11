@@ -362,7 +362,7 @@ def manual_compute(info: dict, rows: list[dict], today: str, include_base_day: b
 
     recent = [
         {"date": r["date"], "volume": round(r["volume"], 4)}
-        for r in settled[-7:]
+        for r in settled[-14:]
     ]
     daily_series = [
         {"date": r["date"], "volume": round(r["volume"], 4)} for r in settled
@@ -417,7 +417,7 @@ def run_sensor_cases(snap: dict, include_flag: bool | None) -> list[str]:
     for include_base_day, label in flags:
         entry = FakeConfigEntry({const.CONF_INCLUDE_BASE_DAY: include_base_day})
         coord = coordinator_mod.TanengGasCoordinator(_HomeAssistant(), entry)
-        result = coord._compute(info, rows, today)
+        result = coord._compute(info, rows, today=today)
 
         print(f"\n▶ {label}  参考日期 = {today}")
         print(f"   官方读数(上个账期) = {result['official_reading']} m³ @ {result['base_date']}")
@@ -439,7 +439,7 @@ def run_sensor_cases(snap: dict, include_flag: bool | None) -> list[str]:
         expect_equal("已结算日期(对照)", result["settled_date"], manual["settled_date"], errors)
         compare("数据滞后(对照)", result["data_lag_days"], manual["data_lag_days"], errors)
         expect_equal("每日耗气量明细(对照)", result["daily_series"], manual["daily_series"], errors)
-        expect_equal("最近7天(对照)", result["recent_days"], manual["recent"], errors)
+        expect_equal("最近14天(对照)", result["recent_days"], manual["recent"], errors)
         compare("当年累计用量(对照)", result.get("annual_usage"), manual.get("annual_usage"), errors)
         compare("官方年度已结算(对照)", result.get("annual_settled"), manual.get("annual_settled"), errors)
         compare("年度未结算增量(对照)", result.get("annual_unbilled"), manual.get("annual_unbilled"), errors)

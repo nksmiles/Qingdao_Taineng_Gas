@@ -1,6 +1,6 @@
 # 青岛泰能燃气 · Home Assistant 集成
 
-![版本](https://img.shields.io/badge/version-1.2.3-blue)
+![版本](https://img.shields.io/badge/version-1.3.0-blue)
 
 从微信公众号「泰能天然气有限公司」背后的 **ESLink 易联云** 平台读取燃气数据，
 在 Home Assistant 中按**计费账期**展示用气累计、官方抄表读数与**逐日耗气量**，
@@ -90,6 +90,40 @@
   ≤348 → 4.12、否则 4.99；跨档后自动切换。属性含当前档位、各档价格与距下一档剩余量
 - 能源面板：接入 **`燃气总用量`**（total_increasing、永不回落，跨账期跨年不归零）
   = 上个账期累计表读数 + 本账期累计用量
+
+---
+
+## 仪表盘卡片（示例）
+
+项目提供了一套可直接复制的 Lovelace 卡片配置，仿「国网电费」风格（Nord 深色玻璃拟态），
+文件见 [`dashboard/qingdao_taineng_gas_cards.yaml`](dashboard/qingdao_taineng_gas_cards.yaml)。
+
+### 依赖的前端卡片
+
+| 卡片 | 用途 | 是否必需 |
+|---|---|---|
+| [mushroom](https://github.com/piitaya/lovelace-mushroom) | 标题栏、数值卡、区块标题 | ✅ |
+| [apexcharts-card](https://github.com/RomRider/apexcharts-card) | 14 天柱状图、月度柱状图 | ✅ |
+| [card-mod](https://github.com/thomasloven/lovelace-card-mod) | 配色 / 去边框 / 玻璃拟态 | ✅ |
+| mini-graph-card / button-card | 本方案未使用 | ❌ |
+| stack-in-card | **未使用**（容器改用内置 `vertical-stack` / `grid`） | ❌ |
+
+### 卡片结构
+
+1. **主卡片**：累计表读数、最近一日用量（大号数值）+ 账期小注 + 燃气费单价、当年累计用量；
+2. **信息卡**：本月累计（自然月）、日均（近 14 天）、本账期累计、数据日期；
+3. **阶梯气价剩余**：一 / 二 / 三档剩余气量（取 `燃气费单价` 实体的 `tier_remaining` 属性）；
+4. **趋势卡片**：最近 14 天日用量柱状图 + 当年已出账各月用量柱状图。
+
+### 使用步骤
+
+1. 安装上表 ✅ 的三个前端卡片（HACS → 前端）；
+2. 打开 `dashboard/qingdao_taineng_gas_cards.yaml`，**把所有 `ty_1234` 替换成你实际的实体前缀**
+   （在「开发者工具 → 状态」里搜索"用气 / 燃气 / 泰能"即可看到完整实体 ID）；
+3. 编辑仪表盘 → 添加卡片 → 手动 → 粘贴整段 YAML。
+
+> 卡片中的数值均取自本集成实体的**状态与属性**，不依赖任何自建模板传感器：
+> `recent_days`（最近 14 天）、`monthly`（当年逐月）、`tier_remaining`（三档剩余量）等。
 
 ---
 
@@ -208,7 +242,7 @@ cp -r custom_components/qingdao_taineng_gas /config/custom_components/
 
 **最近一日用量** 额外提供：
 - `reading_date`：该用量对应的日期
-- `recent_days`：最近 7 天用量明细（可用于 ApexCharts 卡片画图）
+- `recent_days`：最近 **14 天**用量明细 `[{date, volume}, ...]`（可用于 ApexCharts 卡片画图）
 
 **每日耗气量 YYYY-MM-DD**（每日期一个实体）：
 - 值 = 该已结算日当天的耗气量（m³），结算完成后不再变化
@@ -232,6 +266,7 @@ cp -r custom_components/qingdao_taineng_gas /config/custom_components/
 - `tier_thresholds` / `tier_prices`：各档累计上限与单价
 - `tier_remaining`：接口 `cycSurplus`（平台按已结算口径的各档剩余量）
 - `next_tier_at` / `next_tier_remaining`：下一档起点累计量 / 距下一档还差多少 m³
+- `monthly`：当年逐月用量明细 `[{month: '2026-08', volume: 12.3}, ...]`（月度趋势卡片用）
 
 **燃气费单价**（单位 `CNY/m³`）额外提供：
 - 与 `当年累计用量` 相同的年度阶梯属性，方便在卡片上对照核算
