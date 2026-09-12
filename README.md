@@ -98,6 +98,8 @@
 项目提供了一套可直接复制的 Lovelace 卡片配置，仿「国网电费」风格（Nord 深色玻璃拟态），
 文件见 [`dashboard/qingdao_taineng_gas_cards.yaml`](dashboard/qingdao_taineng_gas_cards.yaml)。
 
+![仪表盘卡片效果](dashboard/screenshot.png)
+
 ### 依赖的前端卡片
 
 | 卡片 | 用途 | 是否必需 |
