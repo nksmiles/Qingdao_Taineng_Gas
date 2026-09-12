@@ -23,15 +23,21 @@
 #   - 燃气数据滞后 1 天，“最新”实为昨天；
 #   - 泰能按账期（抄表日→下一抄表日）计费，非自然月；本卡同时给出“本账期”与“自然月”两个口径；
 #   - 月度趋势图来自接口 type=year 的逐月汇总，只显示当年已出账月份。
+#
+# 【隐私说明】
+#   本文件已脱敏：标题栏的小区/房号与实体 ID 中的户号均为示例值，请替换成你自己的。
+#   标题栏既可以写固定文字（小区 + 房号），也可以改回读取户号属性：
+#   {{ state_attr('sensor.ty_1234_shang_ge_zhang_qi_lei_ji_biao_du_shu','user_no') or '' }}
 # =====================================================================
 type: vertical-stack
 cards:
-  # ---------- 标题栏：设备 / 户号 + 数据截至日期 ----------
+  # ---------- 标题栏：地址/户号 + 数据截至日期 ----------
   - type: custom:mushroom-template-card
     primary: 泰能燃气 · 用气监控
+    # 脱敏示例：把“示例小区 1#1-101”换成你自己的小区 + 房号（或改用 user_no 属性显示户号）
     secondary: >-
-      {{ state_attr('sensor.ty_1234_shang_ge_zhang_qi_lei_ji_biao_du_shu','user_no') or '' }} ·
-      数据截至 {{ state_attr('sensor.ty_1234_zui_jin_yi_ri_yong_liang','reading_date') or '—' }}（滞后 {{
+      示例小区 1#1-101 · 数据截至 {{
+      state_attr('sensor.ty_1234_zui_jin_yi_ri_yong_liang','reading_date') or '—' }}（滞后 {{
       state_attr('sensor.ty_1234_zui_jin_yi_ri_yong_liang','data_lag_days') or 1 }} 天）
     icon: mdi:fire
     icon_color: '#88c0d0'
@@ -57,7 +63,7 @@ cards:
         primary: >-
           {{ states('sensor.ty_1234_shang_ge_zhang_qi_lei_ji_biao_du_shu') | float(0) | round(1) }} m³
         secondary: >-
-          累计表读数 · {{ state_attr('sensor.ty_1234_shang_ge_zhang_qi_lei_ji_biao_du_shu','meter_reading_date')
+          抄表数 · {{ state_attr('sensor.ty_1234_shang_ge_zhang_qi_lei_ji_biao_du_shu','meter_reading_date')
           or '—' }} 抄表
         icon: mdi:counter
         icon_color: '#88c0d0'
@@ -95,19 +101,6 @@ cards:
         ha-card { background: none !important; box-shadow: none !important; border: none !important;
         color: #d8dee9; padding: 0 !important; }
 
-  # ---------- 账期口径小注（非自然月，和账单月份不对齐是正常的） ----------
-  - type: markdown
-    content: >-
-      <div class='bill-note'>账期 · {{ state_attr('sensor.ty_1234_ben_zhang_qi_lei_ji_yong_liang','cycle_start')
-      or '—' }} → {{ state_attr('sensor.ty_1234_ben_zhang_qi_lei_ji_yong_liang','cycle_end') or '—' }}
-      （非自然月，抄表日结算）</div>
-    card_mod:
-      style: |
-        ha-card { background: none !important; box-shadow: none !important; border: none !important;
-        color: #d8dee9; padding: 0 2px 6px !important; }
-        ha-markdown { padding: 0 !important; }
-        .bill-note { color: #8792a6; font-size: 12px; letter-spacing: .02em; }
-
   # ---------- 主卡片第二行：燃气费单价（替代电费卡的“日均电费”）+ 当年累计用量 ----------
   - type: grid
     columns: 2
@@ -134,6 +127,7 @@ cards:
             mushroom-shape-icon { --shape-color: rgba(136,192,208,0.10) !important; }
       - type: custom:mushroom-template-card
         entity: sensor.ty_1234_dang_nian_lei_ji_yong_liang
+        # 当年累计用量：户·年累计（每年 1 月 1 日清零）；annual_cycle_end = 本年截止日
         primary: >-
           {{ states('sensor.ty_1234_dang_nian_lei_ji_yong_liang') | float(0) | round(1) }} m³
         secondary: >-
@@ -155,10 +149,15 @@ cards:
         ha-card { background: none !important; box-shadow: none !important; border: none !important;
         color: #d8dee9; padding: 0 0 4px !important; }
 
-  # ---------- 信息卡：本月累计 / 日均 / 数据日期 / 本账期累计 ----------
+  # ---------- 信息卡标题：账期口径直接写进副标题（非自然月，和账单月份不对齐是正常的） ----------
   - type: custom:mushroom-title-card
     title: 用量概览
-    subtitle: 本月为自然月口径；账期见上方小注
+    subtitle: >-
+      本月为自然月口径；账期：{{
+      state_attr('sensor.ty_1234_ben_zhang_qi_lei_ji_yong_liang','cycle_start')
+      or '—' }} → {{
+      state_attr('sensor.ty_1234_ben_zhang_qi_lei_ji_yong_liang','cycle_end')
+      or '—' }} （非自然月，抄表日结算）
     card_mod:
       style: >
         ha-card { background: none !important; box-shadow: none !important; border: none !important;
@@ -166,6 +165,8 @@ cards:
         .title { color: #88c0d0 !important; font-size: 13px !important; font-weight: 760
         !important; letter-spacing: .06em; text-transform: uppercase; }
         .subtitle { color: #8792a6 !important; font-size: 12px !important; }
+
+  # ---------- 信息卡第一行：本月累计（自然月）+ 日均（近 14 天） ----------
   - type: grid
     columns: 2
     square: false
@@ -274,13 +275,13 @@ cards:
     columns: 3
     square: false
     cards:
-      # ★三张卡只有 {% set i = 0 / 1 / 2 %} 和标题不同，其余一致
+      # ★三张卡只有 r[0] / r[1] / r[2] 的下标、图标与右侧价格不同，其余一致
       - type: custom:mushroom-template-card
         primary: >-
           {% set r = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_remaining') or [] %}{% set v
-          = (r[0] if r | length > 0 else 0) %}{{ '无限' if v > 1000000 else (v | float(0) | round(1) ~
-          ' m³') }}
-        secondary: 一档剩余 · 3.54 元/m³
+          = (r[0] if r | length > 0 else 0) %}{{ '无限' if v > 1000000 else ('余 ' ~ v | float(0) |
+          round(1) ~ ' m³') }}
+        secondary: 3.54 元/m³
         icon: mdi:numeric-1-circle-outline
         icon_color: '#8fbcbb'
         tap_action:
@@ -297,9 +298,9 @@ cards:
       - type: custom:mushroom-template-card
         primary: >-
           {% set r = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_remaining') or [] %}{% set v
-          = (r[1] if r | length > 1 else 0) %}{{ '无限' if v > 1000000 else (v | float(0) | round(1) ~
-          ' m³') }}
-        secondary: 二档剩余 · 4.12 元/m³
+          = (r[1] if r | length > 1 else 0) %}{{ '无限' if v > 1000000 else ('余 ' ~ v | float(0) |
+          round(1) ~ ' m³') }}
+        secondary: 4.12 元/m³
         icon: mdi:numeric-2-circle-outline
         icon_color: '#81a1c1'
         tap_action:
@@ -316,9 +317,9 @@ cards:
       - type: custom:mushroom-template-card
         primary: >-
           {% set r = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_remaining') or [] %}{% set v
-          = (r[2] if r | length > 2 else 0) %}{{ '无限' if v > 1000000 else (v | float(0) | round(1) ~
-          ' m³') }}
-        secondary: 三档剩余 · 4.99 元/m³
+          = (r[2] if r | length > 2 else 0) %}{{ '无限' if v > 1000000 else ('余 ' ~ v | float(0) |
+          round(1) ~ ' m³') }}
+        secondary: 4.99 元/m³
         icon: mdi:numeric-3-circle-outline
         icon_color: '#ebcb8b'
         tap_action:
@@ -530,7 +531,7 @@ cards:
 # =====================================================================
 # 外层容器样式：Nord 深色 + 整体背景色。
 #   ⚠️ vertical-stack 内部**没有 ha-card 元素**，所以外层样式必须写在 :host / #root 上；
-#      之前写成 ha-card 是匹配不到任何元素的（这正是背景色不生效的原因）。
+#      写成 ha-card 是匹配不到任何元素的（这正是背景色不生效的原因）。
 #   想换整体底色，只改下面的 --tn-bg-card 一行即可；
 #   把 width 改成 100% 可让它自动铺满整列。
 # =====================================================================
