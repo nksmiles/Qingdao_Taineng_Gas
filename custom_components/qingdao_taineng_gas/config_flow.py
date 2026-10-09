@@ -13,17 +13,23 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import EsLinkApi, EsLinkAuthError, EsLinkError
 from .const import (
     CONF_BASE_QUERY_TIME,
+    CONF_HOUSEHOLD_SIZE,
     CONF_INCLUDE_BASE_DAY,
     CONF_METER_NO,
     CONF_METER_TYPE,
+    CONF_MULTI_PERSON,
     CONF_QUERY_COUNT,
     CONF_SESSION,
     CONF_USER_NO,
     DEFAULT_BASE_QUERY_TIME,
+    DEFAULT_HOUSEHOLD_SIZE,
     DEFAULT_INCLUDE_BASE_DAY,
     DEFAULT_METER_TYPE,
+    DEFAULT_MULTI_PERSON,
     DEFAULT_QUERY_COUNT,
     DOMAIN,
+    HOUSEHOLD_MAX,
+    HOUSEHOLD_MIN,
     QUERY_COUNT_MAX,
     QUERY_COUNT_MIN,
     parse_query_time,
@@ -72,6 +78,17 @@ def _normalize_query_time(value: Any) -> str | None:
     if minutes is None:
         return None
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _normalize_household_size(value: Any) -> int | None:
+    """把「家庭人口数」规范化为 5~20 的整数；非法返回 None。"""
+    if value in (None, ""):
+        return None
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return None
+    return size if HOUSEHOLD_MIN <= size <= HOUSEHOLD_MAX else None
 
 
 class TanengGasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -244,6 +261,23 @@ class TanengGasOptionsFlow(config_entries.OptionsFlow):
                 else:
                     new_data[CONF_BASE_QUERY_TIME] = base_query_time
 
+                # 一户多人口：启用后按人口数抬高第一阶梯年度上限
+                multi_person = bool(
+                    user_input.get(CONF_MULTI_PERSON, DEFAULT_MULTI_PERSON)
+                )
+                new_data[CONF_MULTI_PERSON] = multi_person
+                if multi_person:
+                    household_size = _normalize_household_size(
+                        user_input.get(CONF_HOUSEHOLD_SIZE, DEFAULT_HOUSEHOLD_SIZE)
+                    )
+                    if household_size is None:
+                        errors[CONF_HOUSEHOLD_SIZE] = "invalid_household_size"
+                    else:
+                        new_data[CONF_HOUSEHOLD_SIZE] = household_size
+                else:
+                    # 关闭多人口时清掉旧的人口数，避免残留配置误导
+                    new_data.pop(CONF_HOUSEHOLD_SIZE, None)
+
             if not errors:
                 self.hass.config_entries.async_update_entry(entry, data=new_data)
                 await self.hass.config_entries.async_reload(entry.entry_id)
@@ -287,6 +321,26 @@ class TanengGasOptionsFlow(config_entries.OptionsFlow):
                         CONF_BASE_QUERY_TIME,
                         default=base_query_time,
                     ): selector.TimeSelector(),
+                    vol.Optional(
+                        CONF_MULTI_PERSON,
+                        default=bool(
+                            entry.data.get(CONF_MULTI_PERSON, DEFAULT_MULTI_PERSON)
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_HOUSEHOLD_SIZE,
+                        default=_normalize_household_size(
+                            entry.data.get(CONF_HOUSEHOLD_SIZE)
+                        )
+                        or DEFAULT_HOUSEHOLD_SIZE,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=HOUSEHOLD_MIN,
+                            max=HOUSEHOLD_MAX,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                 }
             ),
             errors=errors,

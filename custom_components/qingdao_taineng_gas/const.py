@@ -64,6 +64,22 @@ CONF_INCLUDE_BASE_DAY = "include_base_day"
 DEFAULT_INCLUDE_BASE_DAY = False
 
 # ---------------------------------------------------------------
+# 一户多人口（v1.4.0 起可在选项中配置）
+# ---------------------------------------------------------------
+# 青岛泰能（市内三区）民用阶梯气政策：以 4 人为一户基准，
+# 户籍人口每增加 1 人，第一阶梯年度上限 +60 m³（只抬高第一档，
+# 第二档上限固定 348 m³ 不变）。6 口人时一档上限正好顶到 348，
+# 第二档区间消失 —— 全年 ≤348 m³ 全部按一档计价，>348 直接跳第三档。
+# 注意：一户多人口备案有效期 2 年，到期未复核自动回到 4 人基准（228 m³）。
+CONF_MULTI_PERSON = "multi_person"        # 是否启用一户多人口
+CONF_HOUSEHOLD_SIZE = "household_size"     # 家庭户籍人口数（>4）
+DEFAULT_MULTI_PERSON = False
+DEFAULT_HOUSEHOLD_SIZE = 5
+HOUSEHOLD_MIN = 5                          # 启用多人口后允许的最小人口数
+HOUSEHOLD_MAX = 20                         # 允许的最大人口数（防误填）
+HOUSEHOLD_BASE = 4                         # 一户基准人数
+
+# ---------------------------------------------------------------
 # 传感器属性键
 # ---------------------------------------------------------------
 ATTR_READING_DATE = "reading_date"                # 数据日期
@@ -114,34 +130,122 @@ MASK_TAIL_LEN = 4                     # 户号/表号对外展示时保留的末
 
 # ---------------------------------------------------------------
 # 泰能燃气阶梯计价（民用气，户·年累计，每年 1 月 1 日清零）
-#   * 0 – 228 m³（含）   第一阶梯 3.54 元/m³
-#   * 228 – 348 m³（含） 第二阶梯 4.12 元/m³
-#   * > 348 m³           第三阶梯 4.99 元/m³
-# 跨过 228 / 348 阈值后，后续每立方米自动按更高一档计费。
-# 若当地价格政策变化，修改以下三组常量即可。
+#   * 4 人基准（默认）：
+#       0 – 228 m³（含）   第一阶梯 3.54 元/m³
+#       228 – 348 m³（含） 第二阶梯 4.12 元/m³
+#       > 348 m³           第三阶梯 4.99 元/m³
+#   * 一户多人口（户籍 >4 人并已在燃气公司备案）：
+#       每多 1 人第一阶梯年度上限 +60 m³，第二阶梯上限固定 348 不变。
+#       例：5 人 → 一档 0–288；6 人 → 一档 0–348（二档区间消失，
+#       >348 直接跳第三档 4.99 元/m³）；7 人 → 一档 0–408，以此类推。
+# 跨过阶梯阈值后，后续每立方米自动按更高一档计费。
+# 若当地价格政策变化，修改以下常量即可。
 # ---------------------------------------------------------------
-GAS_TIER_THRESHOLDS = (228.0, 348.0)      # 各档累计上限（含）
+GAS_TIER_THRESHOLDS = (228.0, 348.0)      # 4 人基准各档累计上限（含）
 GAS_TIER_PRICES = (3.54, 4.12, 4.99)      # 元/m³
 GAS_TIER_NAMES = ("第一阶梯", "第二阶梯", "第三阶梯")
 
+# 一户多人口参数（政策口径）
+TIER1_BASE_CAP = GAS_TIER_THRESHOLDS[0]   # 4 人基准第一档上限 228 m³
+TIER2_CAP = GAS_TIER_THRESHOLDS[1]        # 第二档上限 348 m³（多人口也不变）
+EXTRA_PER_PERSON = 60.0                   # 每多 1 人第一档年度上限增量
 
-def tier_for_annual_usage(annual_usage: float | None) -> int | None:
-    """按户·年累计用量判定当前适用的阶梯（1/2/3）。"""
+
+def household_size_from_entry(data: Any) -> int | None:
+    """从配置条目数据里解析有效的人口数（未启用多人口或非法时返回 None）。"""
+    if not data or not data.get(CONF_MULTI_PERSON):
+        return None
+    try:
+        size = int(data.get(CONF_HOUSEHOLD_SIZE) or 0)
+    except (TypeError, ValueError):
+        return None
+    return size if HOUSEHOLD_MIN <= size <= HOUSEHOLD_MAX else None
+
+
+def household_tier1_cap(household: int | None) -> float:
+    """一户多人口政策下的第一档年度上限：228 + 每多 1 人 +60 m³。"""
+    if household is None or household <= HOUSEHOLD_BASE:
+        return TIER1_BASE_CAP
+    return round(TIER1_BASE_CAP + (household - HOUSEHOLD_BASE) * EXTRA_PER_PERSON, 4)
+
+
+def tier_table_for(household: int | None = None) -> tuple[tuple[float, int, float, str], ...]:
+    """返回阶梯表，每项为 (档上限含, 档号, 单价, 档名)，最高档上限为 inf。
+
+    * household 为 None / ≤4：4 人基准三档（228 / 348 / ∞）。
+    * household == 5：三档（288 / 348 / ∞）。
+    * household ≥ 6：一档上限 ≥ 二档上限 348，第二档区间消失，
+      实际只剩第一档与第三档两档。
+    """
+    if household is None or household <= HOUSEHOLD_BASE:
+        return (
+            (TIER1_BASE_CAP, 1, GAS_TIER_PRICES[0], GAS_TIER_NAMES[0]),
+            (TIER2_CAP, 2, GAS_TIER_PRICES[1], GAS_TIER_NAMES[1]),
+            (float("inf"), 3, GAS_TIER_PRICES[2], GAS_TIER_NAMES[2]),
+        )
+    cap1 = household_tier1_cap(household)
+    if cap1 >= TIER2_CAP:
+        # 第二档区间被抬高后的第一档覆盖：只有第一档与第三档
+        return (
+            (cap1, 1, GAS_TIER_PRICES[0], GAS_TIER_NAMES[0]),
+            (float("inf"), 3, GAS_TIER_PRICES[2], GAS_TIER_NAMES[2]),
+        )
+    return (
+        (cap1, 1, GAS_TIER_PRICES[0], GAS_TIER_NAMES[0]),
+        (TIER2_CAP, 2, GAS_TIER_PRICES[1], GAS_TIER_NAMES[1]),
+        (float("inf"), 3, GAS_TIER_PRICES[2], GAS_TIER_NAMES[2]),
+    )
+
+
+def tier_thresholds_for(household: int | None = None) -> tuple[float, ...]:
+    """各档累计上限（含），不含无上限的最高档；供属性展示用。"""
+    return tuple(cap for cap, _, _, _ in tier_table_for(household) if cap != float("inf"))
+
+
+def tier_prices_for(household: int | None = None) -> tuple[float, ...]:
+    """按档序排列的各档单价（元/m³）。"""
+    return tuple(price for _, _, price, _ in tier_table_for(household))
+
+
+def tier_names_for(household: int | None = None) -> tuple[str, ...]:
+    """按档序排列的各档名称（多人口 6 人及以上为「第一阶梯 / 第三阶梯」）。"""
+    return tuple(name for _, _, _, name in tier_table_for(household))
+
+
+def tier_for_annual_usage(
+    annual_usage: float | None, household: int | None = None
+) -> int | None:
+    """按户·年累计用量判定当前适用的阶梯（1/2/3，多人口下可能跳档）。"""
     if annual_usage is None:
         return None
     usage = float(annual_usage)
-    for index, cap in enumerate(GAS_TIER_THRESHOLDS):
+    for cap, tier, _, _ in tier_table_for(household):
         if usage <= cap:
-            return index + 1
-    return len(GAS_TIER_PRICES)  # 超过所有档位上限 → 最高档
+            return tier
+    return tier_table_for(household)[-1][1]  # 超过所有档位上限 → 最高档
 
 
-def gas_price_for_annual_usage(annual_usage: float | None) -> float | None:
+def gas_price_for_annual_usage(
+    annual_usage: float | None, household: int | None = None
+) -> float | None:
     """按户·年累计用量得到当前边际单价（下一 m³ 将适用的阶梯价）。"""
-    tier = tier_for_annual_usage(annual_usage)
+    if annual_usage is None:
+        return None
+    usage = float(annual_usage)
+    for cap, _, price, _ in tier_table_for(household):
+        if usage <= cap:
+            return price
+    return tier_table_for(household)[-1][2]
+
+
+def tier_name_for(tier: int | None, household: int | None = None) -> str | None:
+    """按档号取档名（档号与档序解耦：多人口 6 人及以上档号为 1/3）。"""
     if tier is None:
         return None
-    return GAS_TIER_PRICES[tier - 1]
+    for _, table_tier, _, name in tier_table_for(household):
+        if table_tier == tier:
+            return name
+    return None
 
 
 # ---------------------------------------------------------------

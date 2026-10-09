@@ -53,9 +53,6 @@ from .const import (
     ATTR_TIER_THRESHOLDS,
     ATTR_USER_NO,
     DOMAIN,
-    GAS_TIER_NAMES,
-    GAS_TIER_PRICES,
-    GAS_TIER_THRESHOLDS,
     KEY_ANNUAL_USAGE,
     KEY_CYCLE_USAGE,
     KEY_DAILY_SERIES,
@@ -65,7 +62,11 @@ from .const import (
     KEY_TOTAL_GAS,
     MANUFACTURER,
     gas_price_for_annual_usage,
+    household_size_from_entry,
     tier_for_annual_usage,
+    tier_name_for,
+    tier_prices_for,
+    tier_thresholds_for,
 )
 from .coordinator import TanengGasCoordinator, build_last_reset
 
@@ -133,25 +134,35 @@ def _device_info(coordinator: TanengGasCoordinator, entry: ConfigEntry) -> dict[
     }
 
 
-def _annual_tier_attributes(data: dict[str, Any]) -> dict[str, Any]:
-    """年度阶梯计费上下文（「当年累计用量」与「燃气费单价」共用）。"""
+def _annual_tier_attributes(
+    entry: ConfigEntry, data: dict[str, Any]
+) -> dict[str, Any]:
+    """年度阶梯计费上下文（「当年累计用量」与「燃气费单价」共用）。
+
+    阶梯阈值 / 单价 / 档名按「一户多人口」选项动态计算：
+    启用后第一阶梯年度上限 = 228 + (人口数 - 4) × 60 m³，第二档上限固定 348；
+    6 口人及以上时第二档区间消失，实际只有第一档与第三档。
+    """
+    household = household_size_from_entry(getattr(entry, "data", {}))
+    thresholds = tier_thresholds_for(household)
     usage = data.get("annual_usage")
-    tier = tier_for_annual_usage(usage)
+    tier = tier_for_annual_usage(usage, household)
     attrs: dict[str, Any] = {
         ATTR_ANNUAL_SETTLED: data.get("annual_settled"),
         ATTR_ANNUAL_UNBILLED: data.get("annual_unbilled"),
         ATTR_ANNUAL_CYCLE_END: data.get("annual_cycle_end"),
         ATTR_LADDER: data.get("annual_ladder"),
-        ATTR_TIER_THRESHOLDS: GAS_TIER_THRESHOLDS,
-        ATTR_TIER_PRICES: GAS_TIER_PRICES,
+        ATTR_TIER_THRESHOLDS: thresholds,
+        ATTR_TIER_PRICES: tier_prices_for(household),
         ATTR_TIER_REMAINING: data.get("tier_remaining", []),
         ATTR_TIER: tier,
-        ATTR_TIER_NAME: GAS_TIER_NAMES[tier - 1] if tier else None,
+        ATTR_TIER_NAME: tier_name_for(tier, household),
         ATTR_NEXT_TIER_AT: None,
         ATTR_NEXT_TIER_REMAINING: None,
     }
-    if tier is not None and usage is not None and tier < len(GAS_TIER_THRESHOLDS):
-        next_at = GAS_TIER_THRESHOLDS[tier - 1]
+    if tier is not None and usage is not None and tier <= len(thresholds):
+        # 当前不在最高档时，给出下一档起点与剩余量
+        next_at = thresholds[tier - 1]
         attrs[ATTR_NEXT_TIER_AT] = next_at
         attrs[ATTR_NEXT_TIER_REMAINING] = round(max(0.0, next_at - usage), 4)
     return attrs
@@ -338,7 +349,7 @@ class AnnualUsageSensor(TanengGasBaseEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs = self._common_attributes()
-        attrs.update(_annual_tier_attributes(self._data))
+        attrs.update(_annual_tier_attributes(self._entry, self._data))
         # 当年逐月用量：[{month: '2026-08', volume: 12.3}, ...]，
         # 供卡片画「当年已出账单各月趋势」柱状图
         attrs[ATTR_MONTHLY] = self._data.get("monthly_series", [])
@@ -350,7 +361,9 @@ class GasPriceSensor(TanengGasBaseEntity):
 
     按「当年累计用量」判定当前阶梯，状态 = 下一立方米将适用的单价：
     第一阶梯 3.54 / 第二阶梯 4.12 / 第三阶梯 4.99（元/m³）。
-    当年累计跨过 228 / 348 阈值后，本实体自动切换到更高一档单价。
+    启用「一户多人口」选项后，第一阶梯年度上限按人口数抬高
+    （228 + 每多 1 人 +60 m³），6 口人及以上实际只剩第一档与第三档。
+    当年累计跨过阶梯阈值后，本实体自动切换到更高一档单价。
     """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -365,12 +378,13 @@ class GasPriceSensor(TanengGasBaseEntity):
 
     @property
     def native_value(self) -> float | None:
-        return gas_price_for_annual_usage(self._data.get("annual_usage"))
+        household = household_size_from_entry(getattr(self._entry, "data", {}))
+        return gas_price_for_annual_usage(self._data.get("annual_usage"), household)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs = self._common_attributes()
-        attrs.update(_annual_tier_attributes(self._data))
+        attrs.update(_annual_tier_attributes(self._entry, self._data))
         return attrs
 
 
