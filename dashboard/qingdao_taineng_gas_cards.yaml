@@ -336,10 +336,11 @@ cards:
         tap_action:
           action: more-info
         entity: sensor.ty_1234_ran_qi_fei_dan_jia
-        conditional: >-
-          {{ (state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_names') or []) | length > 2 }}
         card_mod:
           style: >
+            {% set n = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_names') or [] %}
+            {% if (n | length) <= 2 %}ha-card { display: none !important; }
+            {% endif %}
             ha-card { background: none !important; box-shadow: none !important; border: none
             !important; color: #d8dee9; padding: 4px 0 !important; text-align: center; }
             :host { --card-primary-font-size: 18px; --card-primary-font-weight: 780;

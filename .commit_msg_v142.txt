@@ -1,0 +1,9 @@
+fix: 仪表盘第三张卡对 6 口人仍显示「余 0」（v1.4.2）
+
+- mushroom-template-card 不支持 conditional 字段，
+  改用 card_mod 样式条件性注入 display:none 真正隐藏第三张卡
+- tier_names 长度 ≤ 2（6 口人及以上）时整张卡 display:none，
+  4/5 人正常渲染
+- 移除 1.4.1 留下的无效 conditional 字段
+- 集成代码无变更，仅仪表盘 YAML 修复
+- CHANGELOG / README 徽章 / manifest 版本 → 1.4.2
