@@ -248,6 +248,57 @@ def tier_name_for(tier: int | None, household: int | None = None) -> str | None:
     return None
 
 
+def effective_tier_remaining(
+    raw_remaining: list[float] | None,
+    household: int | None,
+    annual_usage: float | None,
+) -> list[float]:
+    """按一户多人口政策重算「各档剩余气量」。
+
+    平台接口 ``cycSurplus`` 始终按 4 人基准（228 / 348）返回三项：
+    ``[一档剩余(=228−用量), 二档剩余(=120 的固定槽位), 三档剩余(哨兵 99999999)]``。
+    启用一户多人口后：
+
+    * 第一档年度上限按人口数抬高（每多 1 人 +60 m³），本函数基于
+      ``annual_usage`` 重新计算**第一档剩余**，避免沿用平台按 4 人基准
+      推算的旧值；
+    * 5 人时仍保留三档结构，第一档剩余重算，二 / 三档沿用平台返回值；
+    * 6 人及以上时第二档区间被一档完全覆盖（实际只有第一档与第三档），
+      **第二档不再单独列项**（即该位置在数组中消失，语义上即
+      「二档剩余 = 0」——其气量已并入第一档上限），数组长度变为 2，
+      与 ``tier_names`` / ``tier_prices`` 严格对齐。
+
+    :param raw_remaining: 接口 ``cycSurplus`` 解析后的列表（可能为空）
+    :param household: 启用多人口时的人口数（>4），未启用传 None
+    :param annual_usage: 当年累计用量（m³），用于精确重算第一档剩余；
+        缺失时回退为「平台值 + 每多 1 人 +60 m³」的近似换算
+    :return: 与当前档位数严格对齐的剩余气量列表
+    """
+    raw = list(raw_remaining or [])
+    r3 = raw[2] if len(raw) > 2 else 99999999.0
+    r2 = raw[1] if len(raw) > 1 else 0.0
+    r1 = raw[0] if raw else 0.0
+
+    # 未启用多人口：保持平台原样
+    if not household or household <= HOUSEHOLD_BASE:
+        return [float(v) for v in raw] if raw else []
+
+    cap1 = household_tier1_cap(household)
+    extra = (household - HOUSEHOLD_BASE) * EXTRA_PER_PERSON
+
+    # 第一档剩余：优先按「档上限 − 当年累计用量」重算，更准确
+    if annual_usage is not None:
+        first_remaining = round(max(0.0, cap1 - float(annual_usage)), 4)
+    else:
+        # annual_usage 缺失时回退近似：把多出来的 60 m³/人 加到平台返回值上
+        first_remaining = round(float(r1) + extra, 4)
+
+    if household >= HOUSEHOLD_BASE + 2:  # ≥6 人：二档区间消失
+        return [first_remaining, float(r3)]
+    # 5 人：仍三档，第一档重算，二 / 三档沿用平台
+    return [first_remaining, float(r2), float(r3)]
+
+
 # ---------------------------------------------------------------
 # 查询计划工具（基础时间 + 每天次数 → 每天的查询时刻）
 # ---------------------------------------------------------------

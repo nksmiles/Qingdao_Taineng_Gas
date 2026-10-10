@@ -260,8 +260,10 @@ cards:
         color: #d8dee9; padding: 0 0 4px !important; }
 
   # ---------- 阶梯气价剩余量（替代电费卡的“阶梯电价档位”） ----------
-  # tier_remaining 属性 = 接口 cycSurplus，格式 [一档剩余, 二档剩余, 三档剩余]；
-  # 三档是“无限量”，接口常返回 99999999 之类的哨兵值，这里显示成“无限”。
+  # 价格 / 剩余 / 档数全部从 sensor 的 tier_prices / tier_remaining / tier_names
+  # 属性动态读取。4–5 人显示三张卡（3.54 / 4.12 / 4.99）；
+  # 启用一户多人口 ≥6 人时第二档区间消失，自动只渲染两张卡（3.54 / 4.99），
+  # 避免硬编码 4.12 元/m³ 的误导显示。
   - type: markdown
     content: >-
       <div class='tou-note'>阶梯气价剩余（户·年累计，每年 1 月 1 日清零）</div>
@@ -275,13 +277,16 @@ cards:
     columns: 3
     square: false
     cards:
-      # ★三张卡只有 r[0] / r[1] / r[2] 的下标、图标与右侧价格不同，其余一致
+      # ★三张卡的价格、剩余量、图标全部读 sensor 属性；6 口人及以上时
+      # tier_names/tier_prices 长度为 2，第三张卡 conditional 自动隐藏。
       - type: custom:mushroom-template-card
         primary: >-
           {% set r = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_remaining') or [] %}{% set v
           = (r[0] if r | length > 0 else 0) %}{{ '无限' if v > 1000000 else ('余 ' ~ v | float(0) |
           round(1) ~ ' m³') }}
-        secondary: 3.54 元/m³
+        secondary: >-
+          {% set p = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_prices') or [] %}{{
+          (p[0] if p | length > 0 else 0) }} 元/m³
         icon: mdi:numeric-1-circle-outline
         icon_color: '#8fbcbb'
         tap_action:
@@ -300,8 +305,12 @@ cards:
           {% set r = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_remaining') or [] %}{% set v
           = (r[1] if r | length > 1 else 0) %}{{ '无限' if v > 1000000 else ('余 ' ~ v | float(0) |
           round(1) ~ ' m³') }}
-        secondary: 4.12 元/m³
-        icon: mdi:numeric-2-circle-outline
+        secondary: >-
+          {% set p = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_prices') or [] %}{{
+          (p[1] if p | length > 1 else 0) }} 元/m³
+        icon: >-
+          {% set n = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_names') or [] %}mdi:numeric-{{
+          3 if (n | length) == 2 else 2 }}-circle-outline
         icon_color: '#81a1c1'
         tap_action:
           action: more-info
@@ -319,12 +328,16 @@ cards:
           {% set r = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_remaining') or [] %}{% set v
           = (r[2] if r | length > 2 else 0) %}{{ '无限' if v > 1000000 else ('余 ' ~ v | float(0) |
           round(1) ~ ' m³') }}
-        secondary: 4.99 元/m³
+        secondary: >-
+          {% set p = state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_prices') or [] %}{{
+          (p[2] if p | length > 2 else 0) }} 元/m³
         icon: mdi:numeric-3-circle-outline
         icon_color: '#ebcb8b'
         tap_action:
           action: more-info
         entity: sensor.ty_1234_ran_qi_fei_dan_jia
+        conditional: >-
+          {{ (state_attr('sensor.ty_1234_ran_qi_fei_dan_jia','tier_names') or []) | length > 2 }}
         card_mod:
           style: >
             ha-card { background: none !important; box-shadow: none !important; border: none

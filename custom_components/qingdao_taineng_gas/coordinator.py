@@ -28,6 +28,8 @@ from .const import (
     DOMAIN,
     QUERY_COUNT_MAX,
     QUERY_COUNT_MIN,
+    effective_tier_remaining,
+    household_size_from_entry,
     parse_query_time,
     query_times_for,
 )
@@ -401,6 +403,16 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for r in settled
         ]
 
+        # 6) tier_remaining：按一户多人口政策重算，使数组与
+        #    tier_names / tier_prices 严格对齐（6 口人及以上只返回 2 项），
+        #    避免仪表盘卡片按 4 人基准硬编码价格显示
+        household = household_size_from_entry(getattr(self.entry, "data", {}))
+        tier_remaining = effective_tier_remaining(
+            _parse_tier_remaining(info.get("cyc_surplus")),
+            household,
+            annual_usage,
+        )
+
         # 6) 数据滞后天数
         lag = None
         if settled_date:
@@ -428,7 +440,7 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "annual_cycle_end": cyc_end or None,
             "annual_cycle_year": year,
             "annual_ladder": info.get("ladder"),
-            "tier_remaining": _parse_tier_remaining(info.get("cyc_surplus")),
+            "tier_remaining": tier_remaining,
             "user_no": info.get("user_no", ""),
             "meter_no": info.get("meter_no", ""),
             "user_address": info.get("user_address", ""),
