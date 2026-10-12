@@ -1,6 +1,7 @@
 # 青岛泰能燃气 · Home Assistant 集成
 
-![版本](https://img.shields.io/badge/version-1.4.2-blue)
+![版本](https://img.shields.io/badge/version-1.4.3-blue)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 
 从微信公众号「泰能天然气有限公司」背后的 **ESLink 易联云** 平台读取燃气数据，
 在 Home Assistant 中按**计费账期**展示用气累计、官方抄表读数与**逐日耗气量**，
@@ -284,6 +285,10 @@ cp -r custom_components/qingdao_taineng_gas /config/custom_components/
 - v1.2.1 起该系列实体**不再设置 `state_class`**（值固定、非累计口径，不参与长期统计与
   能源面板），仅保留燃气设备分类用于展示，避免 `gas` 设备类与 `measurement` 状态类
   冲突导致的日志警告
+- v1.4.3 起**已结算日会持久化到本地 Store**（`HA 配置目录/.storage/qingdao_taineng_gas.daily_history.<entry_id>`），
+  跨越 ESLink 接口的 37 天滚动窗口也不会丢历史：8 月份的实体在 10 月份升级 / 重启
+  HA 后仍能按历史值重建为有状态、不再 `unavailable`；历史最多保留约 13 个月（400 天），
+  超出部分自动清理。
 
 **燃气总用量**（接入能源面板用）额外提供：
 - 值 = `base_reading`（上个账期累计表读数）+ 本账期累计用量，即燃气表当前累计读数

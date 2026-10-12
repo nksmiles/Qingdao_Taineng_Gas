@@ -424,8 +424,14 @@ class DailyUsageSensor(TanengGasBaseEntity):
 class DailyHistorySensor(SensorEntity):
     """每日耗气量（单个已结算日的用量，值固定）。
 
-    为接口滚动窗口内的每个已结算日生成一个实体（名称含日期），
+    为协调器 ``daily_series`` 里的每个已结算日生成一个实体（名称含日期），
     某一天结算完成即锁定该值，不会再变化，可直接用于逐日核对与画图。
+
+    v1.4.3 起：``daily_series`` 由协调器把「磁盘 Store 持久化的历史」与
+    「ESLink 当前滚动窗口」合并而来，因此即便某个日期已滑出 37 天滚动窗口
+    （如 10 月的 8 月份），HA 重启 / 集成重载后仍会按历史快照重建实体，
+    不会再变成 ``unavailable``。历史通过 ``store.async_save_history`` 写入
+    ``.storage/qingdao_taineng_gas.daily_history.<entry_id>``。
 
     注意：不能为 device_class=gas 的实体设置 state_class=measurement
     （HA 只允许 None / total / total_increasing）。本实体的值是某一天的

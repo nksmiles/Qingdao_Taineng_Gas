@@ -33,6 +33,7 @@ from .const import (
     parse_query_time,
     query_times_for,
 )
+from . import store as history_store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +97,9 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_query_timer: Any | None = None
         self._query_day: str = ""
         self._query_seq: int = 0
+        # 已结算日的历史缓存：date_str -> volume（v1.4.3 起从磁盘 Store 加载，
+        # 用于恢复超过 ESLink 滚动窗口（约 37 天）的历史「每日耗气量」实体）。
+        self._daily_history: dict[str, float] = {}
         super().__init__(
             hass,
             _LOGGER,
@@ -215,6 +219,51 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await super().async_shutdown()
 
     # ------------------------------------------------------------------
+    # 每日用量历史持久化（v1.4.3 起：ESLink 滚动窗口约 37 天，
+    # 超过该窗口的「每日耗气量 YYYY-MM-DD」实体在重启后需要从磁盘 Store 恢复）
+    # ------------------------------------------------------------------
+    async def async_load_daily_history(self) -> None:
+        """从磁盘 Store 加载已结算的每日用量历史到内存缓存。
+
+        在首次 ``async_config_entry_first_refresh()`` 之前调用，保证
+        ``_async_update_data`` 的第一次计算也能把历史窗口外的 8 月份数据
+        纳入 ``daily_series``，从而恢复对应的「每日耗气量 YYYY-MM-DD」实体。
+        """
+        try:
+            loaded = await history_store.async_load_history(
+                self.hass, self.entry.entry_id
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("读取每日用量历史失败（已忽略）：%s", err)
+            return
+        if loaded:
+            self._daily_history = dict(loaded)
+            _LOGGER.info(
+                "已加载每日用量历史：%d 天（最早 %s，最新 %s）",
+                len(loaded),
+                min(loaded),
+                max(loaded),
+            )
+        else:
+            self._daily_history = {}
+
+    @property
+    def daily_history(self) -> dict[str, float]:
+        """当前已加载的历史窗口（只读快照，供 sensor 平台展示）。"""
+        return dict(self._daily_history)
+
+    async def _async_persist_daily_history(self) -> None:
+        """把当前内存里的每日用量历史（含本次 API 新增的日期）写回磁盘。"""
+        if not self._daily_history:
+            return
+        try:
+            await history_store.async_save_history(
+                self.hass, self.entry.entry_id, self._daily_history
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("写入每日用量历史失败（已忽略）：%s", err)
+
+    # ------------------------------------------------------------------
     async def _async_update_data(self) -> dict[str, Any]:
         """拉取并计算全部数据（每次真实查询都会在日志中记录）。"""
         api = self._api
@@ -277,6 +326,9 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("第 %d 次查询：月用量获取失败（不影响日用量）：%s", seq, err)
 
         result = self._compute(info, rows, months=months)
+        # v1.4.3：把本次更新累积的每日用量历史回写磁盘 Store，
+        # 保证下次 HA 重启 / 集成重载后能恢复已滑出 ESLink 滚动窗口的实体。
+        await self._async_persist_daily_history()
         _LOGGER.info(
             "第 %d/%d 次查询完成：表号 %s，数据截至 %s（滞后 %s 天），"
             "用时 %.1f 秒，下次查询 %s",
@@ -385,6 +437,8 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             annual_usage = round(annual_settled + annual_unbilled, 4)
 
         # 4) 最近 14 天明细（供「最近一日用量」实体的 recent_days 属性 / 趋势卡片）
+        #    数据源使用「磁盘历史 + 本次 API」合并后的全部已结算日，
+        #    避免因 ESLink 滚动窗口只回 37 天导致八月等老数据缺图。
         recent = [
             {"date": r["date"], "volume": round(r["volume"], 4)}
             for r in settled[-RECENT_DAYS:]
@@ -397,10 +451,20 @@ class TanengGasCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if str(m.get("month", "")).startswith(str(year)) and m.get("volume") is not None
         ]
 
-        # 5) 全部已结算日的逐日用量（滚动窗口内，用于每日耗气量实体）
+        # 5) 全部已结算日的逐日用量（v1.4.3 起合并磁盘历史 + 本次 API）
+        #    把 ``self._daily_history`` 与本次 API 返回的 ``settled`` 合并，
+        #    API 优先（同日冲突时取最新值），保证超出 ESLink 滚动窗口的
+        #    「每日耗气量 YYYY-MM-DD」实体在 HA 重启后仍能恢复。
+        merged_rows = history_store.merge_with_history(
+            settled, self._daily_history
+        )
+        # 把本次拿到的「滚动窗口内」明细回填到历史缓存中
+        # （API 优先，setdefault 避免覆盖已确认的早期值）
+        for r in settled:
+            self._daily_history[str(r["date"])] = round(float(r["volume"]), 4)
         daily_series = [
-            {"date": r["date"], "volume": round(r["volume"], 4)}
-            for r in settled
+            {"date": item["date"], "volume": round(float(item["volume"]), 4)}
+            for item in merged_rows
         ]
 
         # 6) tier_remaining：按一户多人口政策重算，使数组与

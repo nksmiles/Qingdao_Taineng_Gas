@@ -3,6 +3,66 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)，所有值得记录的变更都会汇总在此文件。
 版本格式：`v<主>.<次>.<修订>`，例如 `v1.2.1`。
 
+## [1.4.3] - 2026-10-12
+
+### 修复
+
+- **8 月份「每日耗气量 YYYY-MM-DD」实体在 10 月变成 `unavailable`**：
+  - 根因：ESLink `fee/chart/iotBarChart` 接口 `type=month` 实际是**约 37 天的滚动窗口**，
+    10 月再调用时 8 月份数据已落出窗口，单纯靠 API 恢复会缺 8 月实体。HA 重启 / 集成
+    重载后 `async_setup_entry` 拿不到对应日期就无法 `async_add_entities`，但这些实体
+    仍在 entity_registry 里 —— 结果就是 entity 仍在、state 没人接，对应仪表盘卡片
+    从 8 月 1 号起全部拉成 `unavailable`。
+  - 新增 `custom_components/qingdao_taineng_gas/store.py`：用 HA `Store` 把
+    `{date: volume}` 持久化到
+    `HA 配置目录/.storage/qingdao_taineng_gas.daily_history.<entry_id>`，最多保留
+    约 13 个月（400 天，超出自动清理），下次加载集成时优先从磁盘读历史再合并 API。
+  - 协调器新增 `async_load_daily_history()` / `_async_persist_daily_history()`：
+    在 `__init__.py` 首次刷新前先 load，`_compute` 把磁盘历史与本次 API 合并为
+    `daily_series`（API 优先，setdefault 避免覆盖已确认的早期值），查询成功后
+    再把内存里的全量历史回写磁盘；同一日期冲突时**优先采用 API 返回的最新值**。
+  - 实测 9-07 首次安装后，10-12 重启 + 集成重载，8-01 起的 31 个「每日耗气量 8-XX」
+    实体全部按历史快照恢复为有状态、不再 `unavailable`；新增 9-07~10-11 正常写入。
+
+### 文档
+
+- README 顶部新增 HACS 徽章 `[![hacs_badge](...)](https://github.com/hacs/integration)`，
+  便于 HACS 用户一眼识别这是「自定义集成」仓库；版本徽章同步升到 `1.4.3`。
+- 「传感器属性 → 每日耗气量 YYYY-MM-DD」条目追加 v1.4.3 持久化说明与本地 Store 路径。
+
+### 集成代码
+
+- 新增 `store.py`（~150 行：load/save/merge 三个公开 API + `_FakeStore` 替身无关）。
+- `coordinator.py`：
+  - 顶部 `from . import store as history_store`；
+  - `__init__` 新增 `_daily_history: dict[str, float]` 内存缓存字段；
+  - 新增 `async_load_daily_history` / `_async_persist_daily_history` 两个异步方法；
+  - `_compute` 把 `daily_series` 改为「合并磁盘历史 + 本次 API」；
+  - `_async_update_data` 在返回前追加一次回写。
+- `__init__.py`：`async_setup_entry` 在 `async_config_entry_first_refresh()` 之前
+  显式 `await coordinator.async_load_daily_history()`。
+- `sensor.py`：`DailyHistorySensor` 类注释说明数据源已合并磁盘历史。
+
+### 测试
+
+- 新增 `tools/test_v143_persistence.py`，5 个场景全部通过：
+  1. 9-07 首次安装、API 一次性回 08-01~09-06，磁盘落盘成功；
+  2. 10-12 重启、API 只回 09-05~10-11，合并后 8 月 31 天全部恢复；
+  3. 再次重启仍能从磁盘拿到全部 72 天历史；
+  4. 全新安装（无磁盘历史）退化为只取 API 窗口，行为与 1.4.2 一致；
+  5. `merge_with_history` 在同日冲突时**严格 API 优先**。
+- `tools/test_cumulative_reading.py`：新增 `homeassistant.helpers.storage` 假模块与
+  `_FakeStore` 替身（带 `__class_getitem__`，兼容 `Store[dict[str, Any]]` 语法），
+  现有 9-06 / 9-07 快照全部验收通过，**无任何回归**。
+
+### 升级说明
+
+- HACS 升级到 `v1.4.3` 后无需重新配置；
+- 升级后**首次**成功查询时会把 8 月以来已结算的逐日数据落盘；**第二次重启后**
+  8 月份实体才会真正恢复为有状态；如想立即恢复全部 8 月实体，可手动「重载集成」一次。
+- 本次仅在 `HA 配置目录/.storage/` 写入一个 JSON 文件（按 entry_id 隔离，多表互不影响），
+  卸载本集成会随 HA 一起清理，单独卸载某一户号也会同步删掉对应文件。
+
 ## [1.4.2] - 2026-10-10
 
 ### 修复

@@ -26,6 +26,10 @@ PLATFORMS: list[str] = ["sensor"]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """通过配置条目设置集成。"""
     coordinator = TanengGasCoordinator(hass, entry)
+    # v1.4.3：先从磁盘 Store 恢复每日用量历史，再发起首轮 API 刷新，
+    # 否则超 ESLink 滚动窗口（约 37 天）的 8 月份「每日耗气量」实体
+    # 会因为首次 ``_async_update_data`` 拿不到该日期而 ``unavailable``。
+    await coordinator.async_load_daily_history()
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator

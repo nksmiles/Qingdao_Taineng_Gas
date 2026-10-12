@@ -99,6 +99,7 @@ for _name in [
     "homeassistant.exceptions",
     "homeassistant.helpers",
     "homeassistant.helpers.aiohttp_client",
+    "homeassistant.helpers.storage",
     "homeassistant.helpers.update_coordinator",
 ]:
     _fake_module(_name)
@@ -109,6 +110,7 @@ _ha.core = sys.modules["homeassistant.core"]
 _ha.exceptions = sys.modules["homeassistant.exceptions"]
 _ha.helpers = sys.modules["homeassistant.helpers"]
 _ha.helpers.aiohttp_client = sys.modules["homeassistant.helpers.aiohttp_client"]
+_ha.helpers.storage = sys.modules["homeassistant.helpers.storage"]
 _ha.helpers.update_coordinator = sys.modules["homeassistant.helpers.update_coordinator"]
 
 
@@ -181,6 +183,80 @@ _api_stub.EsLinkApi = type("EsLinkApi", (), {})
 _api_stub.EsLinkAuthError = type("EsLinkAuthError", (Exception,), {})
 _api_stub.EsLinkError = type("EsLinkError", (Exception,), {})
 sys.modules[f"{PKG}.api"] = _api_stub
+
+# v1.4.3 起的「每日用量历史」持久化（store.py）。离线测试不真正落盘，
+# 只用一份内存 dict 替代 Store.async_save / async_load。
+_history_disk: dict[str, dict[str, float]] = {}
+
+
+class _FakeStore:
+    def __init__(self, hass, version, key):
+        self.key = key
+        self._data: dict[str, dict[str, float]] = {}
+
+    def __class_getitem__(cls, item):
+        # 与真实 Store 一致：Store[dict[str, Any]](...) 仍应得到 Store 实例
+        return cls
+
+    async def async_load(self):
+        return _history_disk.get(self.key)
+
+    async def async_save(self, data):
+        _history_disk[self.key] = data
+
+
+_storage_mod = sys.modules["homeassistant.helpers.storage"]
+_storage_mod.Store = _FakeStore  # type: ignore[attr-defined]
+
+# 真正的 store 模块需要 HomeAssistant 实例作为构造参数，因此用替身取代：
+class _FakeHistoryStore:
+    @staticmethod
+    def get_store(hass, entry_id):
+        return _FakeStore(hass, 1, f"qingdao_taineng_gas.daily_history.{entry_id}")
+
+    @staticmethod
+    async def async_load_history(hass, entry_id):
+        store = _FakeStore(hass, 1, f"qingdao_taineng_gas.daily_history.{entry_id}")
+        return (await store.async_load() or {}).get("daily", {})
+
+    @staticmethod
+    async def async_save_history(hass, entry_id, daily):
+        store = _FakeStore(hass, 1, f"qingdao_taineng_gas.daily_history.{entry_id}")
+        await store.async_save({"daily": dict(daily)})
+
+    @staticmethod
+    def merge_with_history(api_rows, history):
+        merged = {}
+        for item in api_rows:
+            d = str(item.get("date") or "")
+            if len(d) != 10:
+                continue
+            merged[d] = round(float(item.get("volume") or 0.0), 4)
+        for d, v in history.items():
+            merged.setdefault(d, v)
+        return [
+            {"date": d, "volume": v}
+            for d, v in sorted(merged.items(), key=lambda kv: kv[0])
+        ]
+
+    @staticmethod
+    def to_recent_days(merged, limit):
+        return [
+            {"date": item["date"], "volume": round(float(item["volume"]), 4)}
+            for item in merged[-limit:]
+        ]
+
+
+_store_stub = types.ModuleType(f"{PKG}.store")
+for _attr in (
+    "get_store",
+    "async_load_history",
+    "async_save_history",
+    "merge_with_history",
+    "to_recent_days",
+):
+    setattr(_store_stub, _attr, getattr(_FakeHistoryStore, _attr))
+sys.modules[f"{PKG}.store"] = _store_stub
 
 coordinator_mod = _load(f"{PKG}.coordinator", "coordinator.py")
 
