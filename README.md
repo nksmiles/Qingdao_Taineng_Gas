@@ -213,7 +213,7 @@ cp -r custom_components/qingdao_taineng_gas /config/custom_components/
 
 1. 在微信“泰能天然气有限公司”窗口，点击“服务大厅”菜单里面的“服务大厅”按钮，在打开的页面中点击“我的”，若已经关联物联网燃气表，在“我的”页面可以看到。若未关联，请根据提示关联。
 
-![服务大厅](images/fu_wu_da_ting1.png)
+<img src="images/fu_wu_da_ting1.png" alt="服务大厅" width="600">
 
 2. 等待页面加载完成并正常显示用气量曲线（多等几秒，页面会自动请求数据）
 3. 此时 Reqable 列表应不断出现 `cloudselfhelp-mobile.eslink.cc` 的请求
@@ -229,7 +229,7 @@ cp -r custom_components/qingdao_taineng_gas /config/custom_components/
    - `/fee/chart/iotBarChart`（日/月用量）
 3. 在右侧详情面板切到**请求 → Headers（请求头）**，在 `Cookie` 字段里找到 `SESSION`：
 
-![Reqable cookie](images/Reqable1.png)
+<img src="images/Reqable1.png" alt="Reqable cookie" width="800">
 
 
    复制 `SESSION` 后面那一串（UUID 格式）
